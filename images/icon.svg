@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="nodeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f093fb;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#f5576c;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Background circle -->
+  <circle cx="64" cy="64" r="60" fill="url(#bgGrad)"/>
+  
+  <!-- Connection lines -->
+  <g stroke="#ffffff" stroke-width="3" stroke-linecap="round" opacity="0.6">
+    <!-- Center to nodes -->
+    <line x1="64" y1="64" x2="64" y2="28"/>
+    <line x1="64" y1="64" x2="95" y2="82"/>
+    <line x1="64" y1="64" x2="33" y2="82"/>
+    <!-- Between outer nodes -->
+    <line x1="64" y1="28" x2="95" y2="82"/>
+    <line x1="95" y1="82" x2="33" y2="82"/>
+    <line x1="33" y1="82" x2="64" y2="28"/>
+  </g>
+  
+  <!-- Center node (Orchestrator) -->
+  <circle cx="64" cy="64" r="16" fill="#ffffff"/>
+  <text x="64" y="70" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="url(#bgGrad)" text-anchor="middle">C</text>
+  
+  <!-- Agent nodes -->
+  <circle cx="64" cy="28" r="12" fill="#ffffff"/>
+  <circle cx="95" cy="82" r="12" fill="#ffffff"/>
+  <circle cx="33" cy="82" r="12" fill="#ffffff"/>
+  
+  <!-- Agent icons (simplified) -->
+  <!-- Top: Developer (code) -->
+  <text x="64" y="33" font-family="Arial" font-size="14" fill="#667eea" text-anchor="middle">&lt;/&gt;</text>
+  <!-- Right: Search (magnifier) -->
+  <circle cx="93" cy="80" r="4" fill="none" stroke="#667eea" stroke-width="2"/>
+  <line x1="96" y1="83" x2="100" y2="87" stroke="#667eea" stroke-width="2"/>
+  <!-- Left: Document (file) -->
+  <rect x="28" y="76" width="10" height="12" rx="1" fill="none" stroke="#667eea" stroke-width="2"/>
+</svg>
