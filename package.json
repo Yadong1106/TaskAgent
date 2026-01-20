@@ -2,7 +2,7 @@
   "name": "taskagent",
   "displayName": "TaskAgent - Multi-Agent Workflow",
   "description": "Eigent-style multi-agent autonomous workflow powered by GitHub Copilot",
-  "version": "0.0.3",
+  "version": "0.0.5",
   "publisher": "yadongzhai",
   "icon": "images/icon.png",
   "engines": {
