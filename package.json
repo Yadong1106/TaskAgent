@@ -19,9 +19,9 @@
   "contributes": {
     "chatParticipants": [
       {
-        "id": "taskagent.workforce",
-        "name": "workforce",
-        "fullName": "TaskAgent Workforce",
+        "id": "taskagent.taskagent",
+        "name": "taskagent",
+        "fullName": "TaskAgent",
         "description": "Multi-agent autonomous workflow assistant",
         "isSticky": true,
         "commands": [

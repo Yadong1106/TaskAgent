@@ -22,15 +22,15 @@ npx playwright install chromium  # Optional, for browser automation
 
 1. Press `F5` to start debugging
 2. Open Copilot Chat (`Ctrl+Shift+I`)
-3. Use `@workforce` to invoke TaskAgent
+3. Use `@taskagent` to invoke TaskAgent
 
 ### Example Commands
 
 ```
-@workforce Help me research React 19 new features and generate a report
-@workforce /research Vue vs React 2024 comparison
-@workforce /code Create an Express API server
-@workforce /automate Search for latest AI papers, summarize top 5, generate Markdown report
+@taskagent Help me research React 19 new features and generate a report
+@taskagent /research Vue vs React 2024 comparison
+@taskagent /code Create an Express API server
+@taskagent /automate Search for latest AI papers, summarize top 5, generate Markdown report
 ```
 
 ## Tools
@@ -48,6 +48,3 @@ npx playwright install chromium  # Optional, for browser automation
 | `taskagent_securityReview` | Generate security review documents |
 | `taskagent_analyzeScenario` | Deep scenario security analysis |
 
-## License
-
-MIT

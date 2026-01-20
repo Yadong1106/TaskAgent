@@ -19,7 +19,7 @@ export async function activate(context: vscode.ExtensionContext) {
     
     // Register Chat Participant
     const workforce = new WorkforceParticipant(taskManager, agentRegistry, backendServer);
-    const participant = vscode.chat.createChatParticipant('taskagent.workforce', workforce.handleRequest.bind(workforce));
+    const participant = vscode.chat.createChatParticipant('taskagent.taskagent', workforce.handleRequest.bind(workforce));
     participant.iconPath = new vscode.ThemeIcon('robot');
     context.subscriptions.push(participant);
 
