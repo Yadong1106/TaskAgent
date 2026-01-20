@@ -98,13 +98,15 @@ export class SecurityReviewTool implements vscode.LanguageModelTool<SecurityRevi
                 includePermissions
             });
 
-            // Save document if output path specified
-            if (outputPath) {
-                await this.saveDocument(outputPath, document);
-            }
+            // Determine output path - always save to file
+            const finalOutputPath = outputPath || `docs/security-review-${featureName.toLowerCase().replace(/\s+/g, '-')}.md`;
+            await this.saveDocument(finalOutputPath, document);
+
+            // Return concise summary instead of full document
+            const summary = this.generateSummary(featureName, finalOutputPath, securityFindings, dataFlowEntries);
 
             return new vscode.LanguageModelToolResult([
-                new vscode.LanguageModelTextPart(document)
+                new vscode.LanguageModelTextPart(summary)
             ]);
 
         } catch (error) {
@@ -114,6 +116,32 @@ export class SecurityReviewTool implements vscode.LanguageModelTool<SecurityRevi
                 )
             ]);
         }
+    }
+
+    private generateSummary(
+        featureName: string, 
+        outputPath: string, 
+        findings: SecurityFinding[], 
+        dataFlow: DataFlowEntry[]
+    ): string {
+        const critical = findings.filter(f => f.severity === 'critical').length;
+        const high = findings.filter(f => f.severity === 'high').length;
+        const medium = findings.filter(f => f.severity === 'medium').length;
+
+        return `✅ Security Review Generated
+
+**Feature**: ${featureName}
+**Output**: \`${outputPath}\`
+
+**Summary**:
+- 📊 Endpoints analyzed: ${dataFlow.length}
+- 🔴 Critical issues: ${critical}
+- 🟠 High issues: ${high}
+- 🟡 Medium issues: ${medium}
+
+${critical > 0 ? '⚠️ Critical issues found - immediate attention required!' : '✅ No critical issues detected.'}
+
+View the full report at \`${outputPath}\``;
     }
 
     private async analyzeFiles(

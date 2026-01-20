@@ -148,8 +148,8 @@ export class ScenarioSecurityAnalyzer implements vscode.LanguageModelTool<Scenar
                 dataFlow.push(...fileAnalysis.dataFlow);
             }
 
-            // 4. Generate security review document
-            const document = this.generateSecurityDocument({
+            // 4. Generate CONCISE security review document
+            const document = this.generateConciseSecurityDocument({
                 scenarioName,
                 scenarioDescription: scenarioDescription || 'No description provided',
                 entryPoint: entryPoint || 'Auto-detected',
@@ -160,13 +160,22 @@ export class ScenarioSecurityAnalyzer implements vscode.LanguageModelTool<Scenar
                 dataFlow
             });
 
-            // 5. Save document (if path specified)
-            if (outputPath) {
-                await this.saveDocument(workspaceFolder.uri, outputPath, document);
-            }
+            // 5. Always save document to file
+            const finalOutputPath = outputPath || `docs/security-review-${scenarioName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')}.md`;
+            await this.saveDocument(workspaceFolder.uri, finalOutputPath, document);
+
+            // 6. Return concise summary instead of full document
+            const summary = this.generateSummary({
+                scenarioName,
+                outputPath: finalOutputPath,
+                filesAnalyzed: allFiles.length,
+                externalAPIs,
+                credentials,
+                dataFlow
+            });
 
             return new vscode.LanguageModelToolResult([
-                new vscode.LanguageModelTextPart(document)
+                new vscode.LanguageModelTextPart(summary)
             ]);
 
         } catch (error) {
@@ -176,6 +185,44 @@ export class ScenarioSecurityAnalyzer implements vscode.LanguageModelTool<Scenar
                 )
             ]);
         }
+    }
+
+    private generateSummary(params: {
+        scenarioName: string;
+        outputPath: string;
+        filesAnalyzed: number;
+        externalAPIs: ExternalAPICall[];
+        credentials: CredentialUsage[];
+        dataFlow: DataFlowPoint[];
+    }): string {
+        const { scenarioName, outputPath, filesAnalyzed, externalAPIs, credentials, dataFlow } = params;
+        
+        const criticalCreds = credentials.filter(c => c.risk === 'critical').length;
+        const highRiskCreds = credentials.filter(c => c.risk === 'high').length;
+        const piiDataPoints = dataFlow.filter(d => d.containsPII).length;
+
+        const hasIssues = criticalCreds > 0 || highRiskCreds > 0;
+
+        return `✅ Security Analysis Complete
+
+**Scenario**: ${scenarioName}
+**Output**: \`${outputPath}\`
+
+**Analysis Summary**:
+- 📁 Files analyzed: ${filesAnalyzed}
+- 🌐 External APIs: ${externalAPIs.length}
+- 🔑 Credentials found: ${credentials.length}
+- 📊 Data flow points: ${dataFlow.length}
+
+**Risk Assessment**:
+${criticalCreds > 0 ? `- 🔴 Critical: ${criticalCreds} hardcoded credentials` : ''}
+${highRiskCreds > 0 ? `- 🟠 High: ${highRiskCreds} credential exposures` : ''}
+${piiDataPoints > 0 ? `- 🟡 PII detected in ${piiDataPoints} data flow points` : ''}
+${!hasIssues && piiDataPoints === 0 ? '- ✅ No critical issues detected' : ''}
+
+${hasIssues ? '⚠️ **Action Required**: Review the security document for details.' : ''}
+
+📄 Full report saved to \`${outputPath}\``;
     }
 
     private async findRelevantFiles(
@@ -844,7 +891,202 @@ _${new Date().toISOString()}_
 
     private async saveDocument(workspaceUri: vscode.Uri, outputPath: string, content: string): Promise<void> {
         const fileUri = vscode.Uri.joinPath(workspaceUri, outputPath);
+        
+        // Create directory if it doesn't exist
+        const dirUri = vscode.Uri.joinPath(workspaceUri, outputPath.split('/').slice(0, -1).join('/'));
+        try {
+            await vscode.workspace.fs.createDirectory(dirUri);
+        } catch {
+            // Directory might already exist
+        }
+        
         await vscode.workspace.fs.writeFile(fileUri, Buffer.from(content, 'utf-8'));
+    }
+
+    /**
+     * Generate a CONCISE security document focused on key findings
+     */
+    private generateConciseSecurityDocument(params: {
+        scenarioName: string;
+        scenarioDescription: string;
+        entryPoint: string;
+        analyzedFiles: string[];
+        externalAPIs: ExternalAPICall[];
+        credentials: CredentialUsage[];
+        callChain: CallChainNode[];
+        dataFlow: DataFlowPoint[];
+    }): string {
+        const { 
+            scenarioName, 
+            scenarioDescription, 
+            entryPoint,
+            analyzedFiles,
+            externalAPIs, 
+            credentials, 
+            dataFlow
+        } = params;
+
+        const now = new Date().toISOString().split('T')[0];
+        const criticalCreds = credentials.filter(c => c.risk === 'critical');
+        const highRiskCreds = credentials.filter(c => c.risk === 'high');
+        const piiPoints = dataFlow.filter(d => d.containsPII);
+
+        let doc = `# Security Review: ${scenarioName}
+
+| Field | Value |
+|-------|-------|
+| **Date** | ${now} |
+| **Entry Point** | \`${entryPoint}\` |
+| **Files Analyzed** | ${analyzedFiles.length} |
+| **Status** | 🔄 Pending Review |
+
+## Overview
+
+${scenarioDescription}
+
+---
+
+## 🚨 Key Findings
+
+`;
+
+        // Only show if there are issues
+        if (criticalCreds.length > 0) {
+            doc += `### 🔴 Critical: Hardcoded Credentials
+
+| Type | Name | File | Line |
+|------|------|------|------|
+`;
+            for (const cred of criticalCreds.slice(0, 10)) {
+                doc += `| ${cred.type} | \`${cred.name}\` | \`${cred.file}\` | ${cred.line} |
+`;
+            }
+            doc += '\n';
+        }
+
+        if (highRiskCreds.length > 0) {
+            doc += `### 🟠 High Risk: Credential Exposure
+
+| Type | Name | Source | File |
+|------|------|--------|------|
+`;
+            for (const cred of highRiskCreds.slice(0, 10)) {
+                doc += `| ${cred.type} | \`${cred.name}\` | ${cred.source} | \`${cred.file}\` |
+`;
+            }
+            doc += '\n';
+        }
+
+        if (piiPoints.length > 0) {
+            doc += `### 🟡 PII Data Flow
+
+| Location | Action | Data Type |
+|----------|--------|-----------|
+`;
+            for (const point of piiPoints.slice(0, 10)) {
+                doc += `| \`${point.location}\` | ${point.action} | ${point.dataType} |
+`;
+            }
+            doc += '\n';
+        }
+
+        if (criticalCreds.length === 0 && highRiskCreds.length === 0 && piiPoints.length === 0) {
+            doc += `✅ **No critical security issues detected.**
+
+`;
+        }
+
+        // External APIs - only if present
+        if (externalAPIs.length > 0) {
+            doc += `---
+
+## 🌐 External API Calls
+
+| API | Endpoint | Method | Permissions |
+|-----|----------|--------|-------------|
+`;
+            // Dedupe and limit
+            const seen = new Set<string>();
+            for (const api of externalAPIs) {
+                const key = `${api.api}|${api.endpoint}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                if (seen.size > 15) break;
+                
+                const perms = [...api.permissions, ...api.scopes].slice(0, 3).join(', ') || 'N/A';
+                const shortEndpoint = api.endpoint.length > 40 ? api.endpoint.substring(0, 40) + '...' : api.endpoint;
+                doc += `| ${api.api} | \`${shortEndpoint}\` | ${api.method} | ${perms} |
+`;
+            }
+            doc += '\n';
+        }
+
+        // Permissions summary
+        const allScopes = new Set<string>();
+        externalAPIs.forEach(api => {
+            api.scopes.forEach(s => allScopes.add(s));
+            api.permissions.forEach(p => allScopes.add(p));
+        });
+
+        if (allScopes.size > 0) {
+            doc += `---
+
+## 🔑 Required Permissions
+
+`;
+            for (const scope of Array.from(allScopes).slice(0, 15)) {
+                doc += `- \`${scope}\`\n`;
+            }
+            doc += '\n';
+        }
+
+        // Recommendations
+        doc += `---
+
+## 📋 Recommendations
+
+`;
+        const recommendations: string[] = [];
+
+        if (criticalCreds.length > 0) {
+            recommendations.push(`🔴 **Move ${criticalCreds.length} hardcoded credential(s) to Azure Key Vault**`);
+        }
+        if (externalAPIs.some(a => a.api.includes('Deprecated'))) {
+            recommendations.push(`🟠 **Migrate from deprecated Azure AD Graph to Microsoft Graph**`);
+        }
+        if (piiPoints.length > 0) {
+            recommendations.push(`🟡 **Review PII handling for GDPR/privacy compliance**`);
+        }
+        if (recommendations.length === 0) {
+            recommendations.push(`✅ No critical issues. Proceed with standard security review.`);
+        }
+
+        for (const rec of recommendations) {
+            doc += `- ${rec}\n`;
+        }
+
+        doc += `
+---
+
+## ✅ Review Checklist
+
+- [ ] External API calls reviewed
+- [ ] Credentials stored securely
+- [ ] Permissions are least-privilege
+- [ ] PII handling compliant
+- [ ] Error handling reviewed
+
+---
+
+| Role | Name | Date |
+|------|------|------|
+| Developer | | |
+| Security Reviewer | | |
+
+_Generated by TaskAgent • ${now}_
+`;
+
+        return doc;
     }
 }
 
