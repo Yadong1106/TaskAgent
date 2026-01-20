@@ -33,11 +33,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Compile TypeScript
-        run: npm run compile
+      - name: Build with esbuild
+        run: npm run esbuild
 
       - name: Package Extension
-        run: npm run package
+        run: npx vsce package --allow-missing-repository
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
@@ -46,7 +46,7 @@ jobs:
           path: '*.vsix'
           retention-days: 30
 
-  # 当推送 tag 时自动创建 Release
+  # Create Release when pushing a tag
   release:
     needs: build
     runs-on: ubuntu-latest

@@ -98,6 +98,11 @@ export class BackendServer {
         if (this.running) return;
 
         return new Promise((resolve, reject) => {
+            // Add timeout to prevent hanging
+            const timeout = setTimeout(() => {
+                reject(new Error('Server start timeout after 5 seconds'));
+            }, 5000);
+
             try {
                 this.server = createServer(this.app);
                 this.io = new SocketIOServer(this.server, {
@@ -115,14 +120,22 @@ export class BackendServer {
                 });
 
                 this.server.listen(this.port, () => {
+                    clearTimeout(timeout);
                     this.running = true;
                     console.log(`TaskAgent backend server running on port ${this.port}`);
                     resolve();
                 });
 
-                this.server.on('error', (error) => {
-                    console.error('Server error:', error);
-                    reject(error);
+                this.server.on('error', (error: NodeJS.ErrnoException) => {
+                    clearTimeout(timeout);
+                    // If port is in use, just log and resolve (non-critical)
+                    if (error.code === 'EADDRINUSE') {
+                        console.warn(`Port ${this.port} is already in use, server not started`);
+                        resolve();
+                    } else {
+                        console.error('Server error:', error);
+                        reject(error);
+                    }
                 });
 
             } catch (error) {

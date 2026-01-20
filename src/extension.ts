@@ -50,13 +50,12 @@ export async function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // Auto-start backend server
-    try {
-        await backendServer.start();
+    // Auto-start backend server (non-blocking to prevent activation hang)
+    backendServer.start().then(() => {
         console.log('TaskAgent backend server started on port 3847');
-    } catch (error) {
+    }).catch((error) => {
         console.warn('Failed to auto-start backend server:', error);
-    }
+    });
 
     // Register tree views
     vscode.window.registerTreeDataProvider('taskagent.tasks', taskManager);
