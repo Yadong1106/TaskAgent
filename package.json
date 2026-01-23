@@ -2,7 +2,7 @@
   "name": "taskagent",
   "displayName": "TaskAgent - Multi-Agent Workflow",
   "description": "Eigent-style multi-agent autonomous workflow powered by GitHub Copilot",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "publisher": "yadongzhai",
   "icon": "images/icon.png",
   "engines": {
@@ -409,7 +409,7 @@
       {
         "name": "taskagent_analyzeScenario",
         "displayName": "Analyze Scenario Security",
-        "modelDescription": "Deep security analysis for an entire scenario/feature. Traces call chains across multiple files, identifies external API calls (Microsoft Graph, AAD Graph, Azure APIs), scans for AppID/ClientSecret/API Keys, analyzes data flow with user content and PII detection, and identifies required permissions/scopes. Use this for comprehensive security reviews of complex features with nested code paths.",
+        "modelDescription": "Deep security analysis for an entire scenario/feature. Performs comprehensive analysis including: 1) UPSTREAM API analysis - finds all callers, HTTP methods, routes that invoke this scenario; 2) DOWNSTREAM API analysis - traces all external API calls (Microsoft Graph, Azure AD, Key Vault, etc.) and database operations; 3) CALL STACK tracing - step-by-step execution path from entry to exit; 4) PERMISSION/SCOPE extraction - identifies required Graph API permissions (User.Read, Group.ReadWrite.All, etc.) with access levels; 5) CREDENTIAL scanning - detects AppID, ClientSecret, API Keys with risk classification; 6) DATA FLOW analysis - tracks PII and user content through the system; 7) MERMAID SEQUENCE DIAGRAM - generates visual flow diagram. Outputs a structured security review document to docs/ folder. Use this for comprehensive security reviews of complex features.",
         "toolReferenceName": "analyzeScenario",
         "canBeReferencedInPrompt": true,
         "icon": "$(shield)",
