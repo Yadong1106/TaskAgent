@@ -213,11 +213,30 @@ export class ScenarioSecurityAnalyzer implements vscode.LanguageModelTool<Scenar
                 scopeRequirements
             });
 
-            // 9. Always save document to file
-            const finalOutputPath = outputPath || `docs/security-review-${scenarioName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')}.md`;
-            await this.saveDocument(workspaceFolder.uri, finalOutputPath, document);
+            // 9. Determine output path - save next to current active file or workspace root
+            const activeEditor = vscode.window.activeTextEditor;
+            let baseDir = workspaceFolder.uri;
+            if (activeEditor) {
+                // Save in the same directory as the currently open file
+                baseDir = vscode.Uri.joinPath(activeEditor.document.uri, '..');
+            }
+            const fileName = `security-review-${scenarioName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')}.md`;
+            const finalOutputPath = outputPath || fileName;
+            const fileUri = outputPath 
+                ? vscode.Uri.joinPath(workspaceFolder.uri, outputPath)
+                : vscode.Uri.joinPath(baseDir, fileName);
+            
+            await vscode.workspace.fs.writeFile(fileUri, Buffer.from(document, 'utf-8'));
 
-            // 10. Return concise summary
+            // 10. Open the generated document in the editor
+            try {
+                const doc = await vscode.workspace.openTextDocument(fileUri);
+                await vscode.window.showTextDocument(doc, { preview: false });
+            } catch (e) {
+                console.warn('Could not open generated document:', e);
+            }
+
+            // 11. Return concise summary
             const summary = this.generateEnhancedSummary({
                 scenarioName,
                 outputPath: finalOutputPath,
