@@ -98,7 +98,7 @@ export class SecurityReviewTool implements vscode.LanguageModelTool<SecurityRevi
                 includePermissions
             });
 
-            // Determine output path - save next to current active file or workspace root
+            // Determine output path - ALWAYS save next to current active file
             const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
             if (!workspaceFolder) {
                 throw new Error('No workspace folder open');
@@ -111,26 +111,20 @@ export class SecurityReviewTool implements vscode.LanguageModelTool<SecurityRevi
                 baseDir = vscode.Uri.joinPath(activeEditor.document.uri, '..');
             }
             const fileName = `security-review-${featureName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')}.md`;
-            const finalOutputPath = outputPath || fileName;
-            const fileUri = outputPath 
-                ? vscode.Uri.joinPath(workspaceFolder.uri, outputPath)
-                : vscode.Uri.joinPath(baseDir, fileName);
+            const fileUri = vscode.Uri.joinPath(baseDir, fileName);
             
             await vscode.workspace.fs.writeFile(fileUri, Buffer.from(document, 'utf-8'));
 
             // Open the generated document in the editor
-            if (true) {
-                // Always try to open
-                try {
-                    const doc = await vscode.workspace.openTextDocument(fileUri);
-                    await vscode.window.showTextDocument(doc, { preview: false });
-                } catch (e) {
-                    console.warn('Could not open generated document:', e);
-                }
+            try {
+                const doc = await vscode.workspace.openTextDocument(fileUri);
+                await vscode.window.showTextDocument(doc, { preview: false });
+            } catch (e) {
+                console.warn('Could not open generated document:', e);
             }
 
             // Return concise summary instead of full document
-            const summary = this.generateSummary(featureName, finalOutputPath, securityFindings, dataFlowEntries);
+            const summary = this.generateSummary(featureName, fileUri.fsPath, securityFindings, dataFlowEntries);
 
             return new vscode.LanguageModelToolResult([
                 new vscode.LanguageModelTextPart(summary)

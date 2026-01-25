@@ -213,7 +213,7 @@ export class ScenarioSecurityAnalyzer implements vscode.LanguageModelTool<Scenar
                 scopeRequirements
             });
 
-            // 9. Determine output path - save next to current active file or workspace root
+            // 9. Determine output path - ALWAYS save next to current active file
             const activeEditor = vscode.window.activeTextEditor;
             let baseDir = workspaceFolder.uri;
             if (activeEditor) {
@@ -221,10 +221,7 @@ export class ScenarioSecurityAnalyzer implements vscode.LanguageModelTool<Scenar
                 baseDir = vscode.Uri.joinPath(activeEditor.document.uri, '..');
             }
             const fileName = `security-review-${scenarioName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')}.md`;
-            const finalOutputPath = outputPath || fileName;
-            const fileUri = outputPath 
-                ? vscode.Uri.joinPath(workspaceFolder.uri, outputPath)
-                : vscode.Uri.joinPath(baseDir, fileName);
+            const fileUri = vscode.Uri.joinPath(baseDir, fileName);
             
             await vscode.workspace.fs.writeFile(fileUri, Buffer.from(document, 'utf-8'));
 
@@ -239,7 +236,7 @@ export class ScenarioSecurityAnalyzer implements vscode.LanguageModelTool<Scenar
             // 11. Return concise summary
             const summary = this.generateEnhancedSummary({
                 scenarioName,
-                outputPath: finalOutputPath,
+                outputPath: fileUri.fsPath,
                 filesAnalyzed: allFiles.length,
                 externalAPIs,
                 credentials,
