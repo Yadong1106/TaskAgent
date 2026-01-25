@@ -145,8 +145,12 @@ Only output valid JSON, no other text.`)
             const runnableIndices = this.findRunnableSubtasks(decomposition, subtaskStatus);
             
             if (runnableIndices.length === 0) {
-                // Deadlock detection
-                if (this.hasRemainingSubtasks(subtaskStatus)) {
+                // Check if there are still viable subtasks (not blocked by failed dependencies)
+                if (this.hasRemainingSubtasks(subtaskStatus) && !this.hasViableSubtasks(decomposition, subtaskStatus)) {
+                    // All remaining tasks are blocked by failed dependencies - not a deadlock, just cascade failure
+                    stream.markdown('\n⚠️ **Remaining subtasks skipped due to dependency failures**\n');
+                    break;
+                } else if (this.hasRemainingSubtasks(subtaskStatus)) {
                     throw new Error('Deadlock detected: no runnable subtasks but task not complete');
                 }
                 break;
@@ -201,6 +205,26 @@ Only output valid JSON, no other text.`)
         return Array.from(status.values()).some(s => s === 'pending' || s === 'running');
     }
 
+    /**
+     * Check if there are any subtasks that can still potentially run
+     * (not blocked by failed dependencies)
+     */
+    private hasViableSubtasks(
+        decomposition: TaskDecomposition,
+        status: Map<number, string>
+    ): boolean {
+        return decomposition.subtasks.some((subtask, index) => {
+            if (status.get(index) !== 'pending') return false;
+            
+            // Check if any dependency has failed - if so, this subtask is not viable
+            const hasFailedDependency = subtask.dependencies.some(
+                depIndex => status.get(depIndex) === 'failed'
+            );
+            
+            return !hasFailedDependency;
+        });
+    }
+
     private findRunnableSubtasks(
         decomposition: TaskDecomposition,
         status: Map<number, string>
@@ -209,6 +233,16 @@ Only output valid JSON, no other text.`)
         
         decomposition.subtasks.forEach((subtask, index) => {
             if (status.get(index) !== 'pending') return;
+            
+            // Check if any dependency has failed - skip this subtask if so
+            const hasFailedDependency = subtask.dependencies.some(
+                depIndex => status.get(depIndex) === 'failed'
+            );
+            if (hasFailedDependency) {
+                // Mark as failed due to dependency failure
+                status.set(index, 'failed');
+                return;
+            }
             
             // Check if all dependencies are completed
             const depsCompleted = subtask.dependencies.every(

@@ -47,4 +47,3 @@ npx playwright install chromium  # Optional, for browser automation
 | `taskagent_codeSearch` | Search code in the workspace |
 | `taskagent_securityReview` | Generate security review documents |
 | `taskagent_analyzeScenario` | Deep scenario security analysis |
-
