@@ -539,15 +539,7 @@ When asked to analyze a scenario:
 ${MANDATORY_INSTRUCTIONS}
 
 ${PHILOSOPHY}
-`;`
-
-
-
-
-
-
-
-
+`;
 
 
 

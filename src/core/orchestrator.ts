@@ -87,7 +87,25 @@ Only output valid JSON, no other text.`)
             // Parse JSON from response
             const jsonMatch = fullResponse.match(/\{[\s\S]*\}/);
             if (jsonMatch) {
-                return JSON.parse(jsonMatch[0]) as TaskDecomposition;
+                const parsed = JSON.parse(jsonMatch[0]) as TaskDecomposition;
+                
+                // Validate and fix dependencies
+                const maxIndex = parsed.subtasks.length - 1;
+                parsed.subtasks.forEach((subtask, index) => {
+                    // Remove invalid dependencies (out of range or self-reference)
+                    subtask.dependencies = subtask.dependencies.filter(dep => 
+                        dep >= 0 && dep <= maxIndex && dep !== index
+                    );
+                    
+                    // Detect circular dependencies - simple check
+                    // If A depends on B and B depends on A, remove one
+                    subtask.dependencies = subtask.dependencies.filter(dep => {
+                        const depSubtask = parsed.subtasks[dep];
+                        return !depSubtask.dependencies.includes(index);
+                    });
+                });
+                
+                return parsed;
             }
             
             // Fallback: single task to developer agent
@@ -145,12 +163,49 @@ Only output valid JSON, no other text.`)
             const runnableIndices = this.findRunnableSubtasks(decomposition, subtaskStatus);
             
             if (runnableIndices.length === 0) {
+                // Debug: Log current status
+                const statusSummary = Array.from(subtaskStatus.entries())
+                    .map(([idx, status]) => `Task ${idx}: ${status}`)
+                    .join(', ');
+                console.log(`[Orchestrator] No runnable tasks. Status: ${statusSummary}`);
+                
+                // Check if all remaining pending tasks have unmet dependencies that are still running
+                const pendingWithRunningDeps = decomposition.subtasks.some((subtask, index) => {
+                    if (subtaskStatus.get(index) !== 'pending') return false;
+                    return subtask.dependencies.some(dep => subtaskStatus.get(dep) === 'running');
+                });
+                
+                if (pendingWithRunningDeps) {
+                    // This shouldn't happen in parallel execution, but if it does, wait
+                    console.log('[Orchestrator] Waiting for running tasks to complete...');
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    continue;
+                }
+                
                 // Check if there are still viable subtasks (not blocked by failed dependencies)
                 if (this.hasRemainingSubtasks(subtaskStatus) && !this.hasViableSubtasks(decomposition, subtaskStatus)) {
                     // All remaining tasks are blocked by failed dependencies - not a deadlock, just cascade failure
                     stream.markdown('\n⚠️ **Remaining subtasks skipped due to dependency failures**\n');
                     break;
                 } else if (this.hasRemainingSubtasks(subtaskStatus)) {
+                    // Log more details for debugging
+                    const pendingTasks = decomposition.subtasks
+                        .map((st, i) => ({ index: i, ...st, status: subtaskStatus.get(i) }))
+                        .filter(st => st.status === 'pending');
+                    
+                    console.error('[Orchestrator] Deadlock details:', JSON.stringify(pendingTasks, null, 2));
+                    
+                    // Instead of throwing, try to run the first pending task anyway
+                    if (pendingTasks.length > 0) {
+                        stream.markdown(`\n⚠️ **Dependency issue detected, forcing execution of remaining tasks**\n`);
+                        // Force-add the first pending task
+                        const forcedTask = pendingTasks[0];
+                        subtaskStatus.set(forcedTask.index, 'pending');
+                        // Clear its dependencies
+                        decomposition.subtasks[forcedTask.index].dependencies = [];
+                        continue;
+                    }
+                    
                     throw new Error('Deadlock detected: no runnable subtasks but task not complete');
                 }
                 break;
@@ -317,27 +372,27 @@ Only output valid JSON, no other text.`)
             }, token);
             
             let result = '';
-            for await (const chunk of response.text) {
-                result += chunk;
-                stream.markdown(chunk);
-            }
             
-            // Handle tool calls if any
-            if (response.toolCalls && response.toolCalls.length > 0) {
-                for (const toolCall of response.toolCalls) {
-                    stream.markdown(`\n📦 Using tool: ${toolCall.name}\n`);
+            // Process the response stream - it may contain text and tool calls
+            for await (const part of response.stream) {
+                if (part instanceof vscode.LanguageModelTextPart) {
+                    result += part.value;
+                    stream.markdown(part.value);
+                } else if (part instanceof vscode.LanguageModelToolCallPart) {
+                    // Handle tool call
+                    stream.markdown(`\n📦 Using tool: ${part.name}\n`);
                     try {
-                        const toolResult = await vscode.lm.invokeTool(toolCall.name, {
-                            input: toolCall.input,
+                        const toolResult = await vscode.lm.invokeTool(part.name, {
+                            input: part.input,
                             toolInvocationToken: undefined
                         }, token);
                         
                         // Extract text from tool result
                         if (toolResult && 'content' in toolResult) {
-                            for (const part of toolResult.content as any[]) {
-                                if (part.value) {
-                                    result += `\n${part.value}`;
-                                    stream.markdown(`\n${part.value}\n`);
+                            for (const content of toolResult.content as any[]) {
+                                if (content.value) {
+                                    result += `\n${content.value}`;
+                                    stream.markdown(`\n${content.value}\n`);
                                 }
                             }
                         }
