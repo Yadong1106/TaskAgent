@@ -302,17 +302,49 @@ Only output valid JSON, no other text.`)
                 });
             }
 
-            // Execute with agent's system prompt
+            // Execute with agent's system prompt AND available tools
             const messages = [
                 vscode.LanguageModelChatMessage.User(agent.systemPrompt),
-                vscode.LanguageModelChatMessage.User(`Task: ${subtask.description}${context}\n\nProvide your response and results.`)
+                vscode.LanguageModelChatMessage.User(`Task: ${subtask.description}${context}\n\nUse the available tools to complete this task. For security reviews, use taskagent_securityReview or taskagent_analyzeScenario tool to generate and save the document.`)
             ];
 
-            const response = await model.sendRequest(messages, {}, token);
+            // Get all available tools so LLM can use them
+            const tools = await vscode.lm.tools;
+            const taskagentTools = tools.filter(t => t.name.startsWith('taskagent_'));
+            
+            const response = await model.sendRequest(messages, { 
+                tools: taskagentTools.length > 0 ? taskagentTools : undefined
+            }, token);
+            
             let result = '';
             for await (const chunk of response.text) {
                 result += chunk;
                 stream.markdown(chunk);
+            }
+            
+            // Handle tool calls if any
+            if (response.toolCalls && response.toolCalls.length > 0) {
+                for (const toolCall of response.toolCalls) {
+                    stream.markdown(`\n📦 Using tool: ${toolCall.name}\n`);
+                    try {
+                        const toolResult = await vscode.lm.invokeTool(toolCall.name, {
+                            input: toolCall.input,
+                            toolInvocationToken: undefined
+                        }, token);
+                        
+                        // Extract text from tool result
+                        if (toolResult && 'content' in toolResult) {
+                            for (const part of toolResult.content as any[]) {
+                                if (part.value) {
+                                    result += `\n${part.value}`;
+                                    stream.markdown(`\n${part.value}\n`);
+                                }
+                            }
+                        }
+                    } catch (toolError) {
+                        stream.markdown(`\n⚠️ Tool error: ${toolError}\n`);
+                    }
+                }
             }
 
             this.taskManager.updateSubtaskStatus(parentTask.id, managedSubtask.id, 'completed', result);
