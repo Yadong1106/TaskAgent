@@ -123,18 +123,69 @@ export class ScenarioSecurityAnalyzer implements vscode.LanguageModelTool<Scenar
         { pattern: /STORAGE_(?:ACCOUNT|KEY)/gi, type: 'Storage Credential' },
         { pattern: /(?:SQL|DB)_(?:PASSWORD|USER)/gi, type: 'Database Credential' },
         { pattern: /OPENAI_API_KEY|AZURE_OPENAI/gi, type: 'OpenAI Credential' },
+        // Token patterns
+        { pattern: /GetTokenAsync|AcquireToken|GetAccessToken/gi, type: 'Token Acquisition' },
+        { pattern: /Bearer\s+[\w-]+/gi, type: 'Bearer Token' },
+        { pattern: /\.Token\s*[=:]/gi, type: 'Token Assignment' },
+        { pattern: /accessToken|idToken|refreshToken/gi, type: 'Token Variable' },
+        { pattern: /TokenCredential|ClientSecretCredential|DefaultAzureCredential/gi, type: 'Azure Credential' },
+        { pattern: /IConfidentialClientApplication|PublicClientApplication/gi, type: 'MSAL Client' },
+        // Certificate patterns
+        { pattern: /X509Certificate|\.pfx|\.pem|\.cer/gi, type: 'Certificate' },
+        { pattern: /CertificateCredential|ClientCertificateCredential/gi, type: 'Certificate Auth' },
     ];
 
-    // Graph API Permission/Scope patterns
+    // Graph API Permission/Scope patterns - Extended
     private readonly GRAPH_SCOPES = [
+        // User
         'User.Read', 'User.ReadWrite', 'User.ReadBasic.All', 'User.Read.All', 'User.ReadWrite.All',
-        'Mail.Read', 'Mail.ReadWrite', 'Mail.Send',
-        'Calendars.Read', 'Calendars.ReadWrite',
-        'Files.Read', 'Files.ReadWrite', 'Files.ReadWrite.All',
-        'Directory.Read.All', 'Directory.ReadWrite.All',
-        'Group.Read.All', 'Group.ReadWrite.All',
-        'Application.Read.All', 'Application.ReadWrite.All',
-        'Sites.Read.All', 'Sites.ReadWrite.All',
+        // Mail
+        'Mail.Read', 'Mail.ReadWrite', 'Mail.Send', 'Mail.ReadBasic', 'Mail.ReadWrite.Shared',
+        // Calendar
+        'Calendars.Read', 'Calendars.ReadWrite', 'Calendars.Read.Shared',
+        // Files/OneDrive
+        'Files.Read', 'Files.ReadWrite', 'Files.ReadWrite.All', 'Files.Read.All',
+        // Directory/Azure AD
+        'Directory.Read.All', 'Directory.ReadWrite.All', 'Directory.AccessAsUser.All',
+        // Group
+        'Group.Read.All', 'Group.ReadWrite.All', 'Group.Create', 'GroupMember.Read.All', 'GroupMember.ReadWrite.All',
+        // Application
+        'Application.Read.All', 'Application.ReadWrite.All', 'Application.ReadWrite.OwnedBy',
+        // Sites/SharePoint
+        'Sites.Read.All', 'Sites.ReadWrite.All', 'Sites.Manage.All', 'Sites.FullControl.All',
+        // Teams
+        'Team.ReadBasic.All', 'Team.Create', 'TeamSettings.Read.All', 'TeamSettings.ReadWrite.All',
+        'Channel.ReadBasic.All', 'Channel.Create', 'ChannelMessage.Read.All', 'ChannelMessage.Send',
+        'TeamMember.Read.All', 'TeamMember.ReadWrite.All', 'TeamsActivity.Send',
+        // Chat
+        'Chat.Read', 'Chat.ReadWrite', 'Chat.Create', 'ChatMessage.Read', 'ChatMessage.Send',
+        // Presence
+        'Presence.Read', 'Presence.Read.All',
+        // Reports
+        'Reports.Read.All',
+        // Security
+        'SecurityEvents.Read.All', 'SecurityEvents.ReadWrite.All',
+        // Audit
+        'AuditLog.Read.All',
+        // Device
+        'Device.Read.All', 'Device.ReadWrite.All',
+        // Role Management
+        'RoleManagement.Read.All', 'RoleManagement.ReadWrite.All',
+        // Policy
+        'Policy.Read.All', 'Policy.ReadWrite.ConditionalAccess',
+    ];
+
+    // Endpoint patterns for better detection
+    private readonly ENDPOINT_PATTERNS = [
+        // REST patterns
+        { pattern: /\[Http(Get|Post|Put|Delete|Patch)\s*\(\s*["']([^"']+)["']\s*\)\]/gi, type: 'ASP.NET Endpoint' },
+        { pattern: /\[Route\s*\(\s*["']([^"']+)["']\s*\)\]/gi, type: 'Route Attribute' },
+        { pattern: /app\.(get|post|put|delete|patch)\s*\(\s*["']([^"']+)["']/gi, type: 'Express Endpoint' },
+        { pattern: /router\.(get|post|put|delete|patch)\s*\(\s*["']([^"']+)["']/gi, type: 'Router Endpoint' },
+        { pattern: /@(Get|Post|Put|Delete|Patch)Mapping\s*\(\s*["']([^"']+)["']\s*\)/gi, type: 'Spring Endpoint' },
+        // Graph API endpoints
+        { pattern: /\/v1\.0\/(users|groups|teams|sites|me|drives|chats|channels)[^\s'"]*/gi, type: 'Graph API v1.0' },
+        { pattern: /\/beta\/(users|groups|teams|sites|me|drives|chats|channels)[^\s'"]*/gi, type: 'Graph API beta' },
     ];
 
     async prepareInvocation(
@@ -156,76 +207,101 @@ export class ScenarioSecurityAnalyzer implements vscode.LanguageModelTool<Scenar
             scenarioDescription,
             entryPoint,
             searchKeywords = [],
-            outputPath
         } = options.input;
 
         try {
-            // 1. Scan entire codebase
             const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-            if (!workspaceFolder) {
-                throw new Error('No workspace folder open');
+
+            // ========================================
+            // STEP 1: Get content from the ACTIVE FILE (primary source)
+            // ========================================
+            const activeEditor = vscode.window.activeTextEditor;
+            if (!activeEditor) {
+                return new vscode.LanguageModelToolResult([
+                    new vscode.LanguageModelTextPart(
+                        `⚠️ No file is currently open.\n\n` +
+                        `Please open the file that contains the scenario "${scenarioName}" and try again.`
+                    )
+                ]);
             }
 
-            // 2. Find all related files
-            const allFiles = await this.findRelevantFiles(scenarioName, entryPoint, searchKeywords, token);
+            const activeDocument = activeEditor.document;
+            const activeFilePath = vscode.workspace.asRelativePath(activeDocument.uri);
+            const activeContent = activeDocument.getText();
+            const activeLines = activeContent.split('\n');
 
-            // 3. Deep analyze each file
-            const externalAPIs: ExternalAPICall[] = [];
-            const credentials: CredentialUsage[] = [];
-            const callChain: CallChainNode[] = [];
-            const dataFlow: DataFlowPoint[] = [];
+            console.log(`[SecurityAnalyzer] Analyzing active file: ${activeFilePath}`);
 
-            for (const filePath of allFiles) {
-                if (token.isCancellationRequested) break;
-
-                const fileAnalysis = await this.analyzeFile(filePath, token);
-                externalAPIs.push(...fileAnalysis.externalAPIs);
-                credentials.push(...fileAnalysis.credentials);
-                callChain.push(...fileAnalysis.callChain);
-                dataFlow.push(...fileAnalysis.dataFlow);
+            // ========================================
+            // STEP 2: Find the scenario in the active file
+            // ========================================
+            const scenarioInfo = this.findScenarioInFile(activeLines, scenarioName);
+            
+            if (!scenarioInfo) {
+                return new vscode.LanguageModelToolResult([
+                    new vscode.LanguageModelTextPart(
+                        `⚠️ Scenario "${scenarioName}" not found in the current file.\n\n` +
+                        `**Current file**: \`${activeFilePath}\`\n\n` +
+                        `**Suggestions**:\n` +
+                        `1. Make sure the scenario name matches exactly (case-sensitive)\n` +
+                        `2. The scenario should be defined in the current file\n` +
+                        `3. Try searching for a partial match\n\n` +
+                        `**File preview (first 20 lines)**:\n\`\`\`\n${activeLines.slice(0, 20).join('\n')}\n\`\`\``
+                    )
+                ]);
             }
 
-            // 4. NEW: Analyze upstream APIs (who calls this scenario)
-            const upstreamAPIs = await this.findUpstreamAPIs(scenarioName, entryPoint, allFiles, token);
+            console.log(`[SecurityAnalyzer] Found scenario at line ${scenarioInfo.line}: ${scenarioInfo.context}`);
 
-            // 5. NEW: Analyze downstream APIs (what this scenario calls)
-            const downstreamAPIs = await this.findDownstreamAPIs(scenarioName, entryPoint, allFiles, externalAPIs, callChain, token);
+            // ========================================
+            // STEP 3: Extract the scenario code block
+            // ========================================
+            const scenarioBlock = this.extractScenarioCodeBlock(activeLines, scenarioInfo.line, scenarioName);
+            console.log(`[SecurityAnalyzer] Extracted scenario block: lines ${scenarioBlock.startLine}-${scenarioBlock.endLine}`);
 
-            // 6. NEW: Build complete call path
-            const callPath = this.buildCallPath(scenarioName, entryPoint, upstreamAPIs, downstreamAPIs, callChain, externalAPIs);
+            // ========================================
+            // STEP 4: Analyze the scenario code block
+            // ========================================
+            const analysis = this.analyzeScenarioBlock(
+                scenarioBlock.code,
+                activeFilePath,
+                scenarioBlock.startLine,
+                scenarioName
+            );
 
-            // 7. NEW: Extract all scope requirements
-            const scopeRequirements = this.extractScopeRequirements(externalAPIs, allFiles);
+            // ========================================
+            // STEP 5: Build call stack from the scenario
+            // ========================================
+            const callStack = this.buildCallStackFromScenario(
+                scenarioBlock.code,
+                activeFilePath,
+                scenarioBlock.startLine,
+                scenarioName
+            );
 
-            // 8. Generate enhanced security review document
-            const document = this.generateEnhancedSecurityDocument({
+            // ========================================
+            // STEP 6: Generate security review document
+            // ========================================
+            const document = this.generateScenarioSecurityDocument({
                 scenarioName,
-                scenarioDescription: scenarioDescription || 'No description provided',
-                entryPoint: entryPoint || 'Auto-detected',
-                analyzedFiles: allFiles,
-                externalAPIs,
-                credentials,
-                callChain,
-                dataFlow,
-                upstreamAPIs,
-                downstreamAPIs,
-                callPath,
-                scopeRequirements
+                scenarioDescription: scenarioDescription || this.extractScenarioDescription(activeLines, scenarioInfo.line),
+                filePath: activeFilePath,
+                scenarioLine: scenarioInfo.line,
+                scenarioCode: scenarioBlock.code,
+                callStack,
+                analysis
             });
 
-            // 9. Determine output path - ALWAYS save next to current active file
-            const activeEditor = vscode.window.activeTextEditor;
-            let baseDir = workspaceFolder.uri;
-            if (activeEditor) {
-                // Save in the same directory as the currently open file
-                baseDir = vscode.Uri.joinPath(activeEditor.document.uri, '..');
-            }
-            const fileName = `security-review-${scenarioName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')}.md`;
+            // ========================================
+            // STEP 7: Save document next to active file
+            // ========================================
+            const baseDir = vscode.Uri.joinPath(activeDocument.uri, '..');
+            const fileName = `security-review-${scenarioName.toLowerCase().replace(/[^a-z0-9]/g, '-')}.md`;
             const fileUri = vscode.Uri.joinPath(baseDir, fileName);
             
             await vscode.workspace.fs.writeFile(fileUri, Buffer.from(document, 'utf-8'));
 
-            // 10. Open the generated document in the editor
+            // Open the generated document
             try {
                 const doc = await vscode.workspace.openTextDocument(fileUri);
                 await vscode.window.showTextDocument(doc, { preview: false });
@@ -233,21 +309,18 @@ export class ScenarioSecurityAnalyzer implements vscode.LanguageModelTool<Scenar
                 console.warn('Could not open generated document:', e);
             }
 
-            // 11. Return concise summary
-            const summary = this.generateEnhancedSummary({
-                scenarioName,
-                outputPath: fileUri.fsPath,
-                filesAnalyzed: allFiles.length,
-                externalAPIs,
-                credentials,
-                dataFlow,
-                upstreamAPIs,
-                downstreamAPIs,
-                scopeRequirements
-            });
-
+            // Return summary
             return new vscode.LanguageModelToolResult([
-                new vscode.LanguageModelTextPart(summary)
+                new vscode.LanguageModelTextPart(
+                    `✅ Security Review Generated\n\n` +
+                    `**Scenario**: ${scenarioName}\n` +
+                    `**Location**: \`${activeFilePath}:${scenarioInfo.line}\`\n` +
+                    `**Code Block**: Lines ${scenarioBlock.startLine}-${scenarioBlock.endLine}\n\n` +
+                    `**Call Stack**: ${callStack.length} method calls traced\n` +
+                    `**APIs Detected**: ${analysis.apis.length}\n` +
+                    `**Permissions**: ${analysis.permissions.length}\n\n` +
+                    `📄 Full report saved to \`${fileName}\``
+                )
             ]);
 
         } catch (error) {
@@ -257,6 +330,508 @@ export class ScenarioSecurityAnalyzer implements vscode.LanguageModelTool<Scenar
                 )
             ]);
         }
+    }
+
+    // ========================================
+    // NEW: Core Scenario Analysis Methods
+    // ========================================
+
+    /**
+     * Find the scenario definition in the file
+     */
+    private findScenarioInFile(lines: string[], scenarioName: string): { line: number; context: string } | null {
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].includes(scenarioName)) {
+                return {
+                    line: i + 1, // 1-indexed
+                    context: lines[i].trim()
+                };
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Extract the code block containing the scenario
+     */
+    private extractScenarioCodeBlock(lines: string[], scenarioLine: number, scenarioName: string): {
+        startLine: number;
+        endLine: number;
+        code: string;
+    } {
+        const lineIndex = scenarioLine - 1; // Convert to 0-indexed
+        
+        // Find the start of the containing block (method/function/case)
+        let startLine = lineIndex;
+        let braceCount = 0;
+        
+        // Look backwards for the start of the block
+        for (let i = lineIndex; i >= 0; i--) {
+            const line = lines[i];
+            
+            // Count braces going backwards
+            braceCount += (line.match(/}/g) || []).length;
+            braceCount -= (line.match(/{/g) || []).length;
+            
+            // Look for case statement or method start
+            if (/^\s*(case\s+|public|private|protected|async|function|def\s)/.test(line) || 
+                (braceCount < 0 && line.includes('{'))) {
+                startLine = i;
+                break;
+            }
+        }
+
+        // Find the end of the block
+        braceCount = 0;
+        let endLine = lineIndex;
+        let foundStart = false;
+        
+        for (let i = startLine; i < lines.length; i++) {
+            const line = lines[i];
+            
+            if (line.includes('{')) foundStart = true;
+            
+            braceCount += (line.match(/{/g) || []).length;
+            braceCount -= (line.match(/}/g) || []).length;
+            
+            // Look for break/return or balanced braces
+            if (foundStart && (braceCount <= 0 || /^\s*(break|return)\s*;/.test(line))) {
+                endLine = i;
+                if (/^\s*(break|return)\s*;/.test(line)) break;
+                if (braceCount <= 0) break;
+            }
+        }
+
+        const code = lines.slice(startLine, endLine + 1).join('\n');
+        
+        return {
+            startLine: startLine + 1, // 1-indexed
+            endLine: endLine + 1,
+            code
+        };
+    }
+
+    /**
+     * Analyze the scenario code block for APIs, permissions, etc.
+     */
+    private analyzeScenarioBlock(code: string, filePath: string, startLine: number, scenarioName: string): {
+        apis: { name: string; endpoint: string; method: string; line: number }[];
+        permissions: { scope: string; reason: string }[];
+        methodCalls: { name: string; line: number }[];
+    } {
+        const apis: { name: string; endpoint: string; method: string; line: number }[] = [];
+        const permissions: { scope: string; reason: string }[] = [];
+        const methodCalls: { name: string; line: number }[] = [];
+        
+        const lines = code.split('\n');
+        
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const absoluteLine = startLine + i;
+            
+            // Find API endpoints
+            const urlMatch = line.match(/["'`](https?:\/\/[^"'`]+|\/v1\.0\/[^"'`]+|\/beta\/[^"'`]+)["'`]/);
+            if (urlMatch) {
+                const endpoint = urlMatch[1];
+                let apiName = 'REST API';
+                if (endpoint.includes('graph.microsoft.com') || endpoint.includes('/v1.0/') || endpoint.includes('/beta/')) {
+                    apiName = 'Microsoft Graph';
+                }
+                apis.push({
+                    name: apiName,
+                    endpoint: endpoint,
+                    method: this.detectHTTPMethod(line),
+                    line: absoluteLine
+                });
+                
+                // Infer permissions from endpoint
+                const inferredPerms = this.inferPermissionsFromEndpoint(endpoint);
+                for (const perm of inferredPerms) {
+                    if (!permissions.some(p => p.scope === perm)) {
+                        permissions.push({ scope: perm, reason: `Inferred from ${endpoint}` });
+                    }
+                }
+            }
+            
+            // Find method calls
+            const methodMatch = line.match(/(?:await\s+)?(?:this\.)?([A-Z][a-zA-Z0-9]*(?:\.[a-zA-Z][a-zA-Z0-9]*)*)\s*\(/g);
+            if (methodMatch) {
+                for (const m of methodMatch) {
+                    const name = m.replace(/await\s+/, '').replace(/this\./, '').replace(/\s*\($/, '');
+                    if (name.length > 2 && !['Console', 'Math', 'Object', 'Array', 'String', 'Promise'].includes(name.split('.')[0])) {
+                        methodCalls.push({ name, line: absoluteLine });
+                    }
+                }
+            }
+            
+            // Find explicit scope definitions
+            const scopeMatch = line.match(/["'`]([A-Z][a-zA-Z]+\.[A-Z][a-zA-Z.]+)["'`]/g);
+            if (scopeMatch) {
+                for (const s of scopeMatch) {
+                    const scope = s.replace(/["'`]/g, '');
+                    if (this.GRAPH_SCOPES.includes(scope) && !permissions.some(p => p.scope === scope)) {
+                        permissions.push({ scope, reason: 'Explicitly defined in code' });
+                    }
+                }
+            }
+        }
+        
+        return { apis, permissions, methodCalls };
+    }
+
+    /**
+     * Build call stack from scenario code
+     */
+    private buildCallStackFromScenario(code: string, filePath: string, startLine: number, scenarioName: string): {
+        step: number;
+        method: string;
+        description: string;
+        line: number;
+    }[] {
+        const callStack: { step: number; method: string; description: string; line: number }[] = [];
+        const lines = code.split('\n');
+        let step = 1;
+        
+        // Add entry point
+        callStack.push({
+            step: step++,
+            method: scenarioName,
+            description: 'Scenario Entry Point',
+            line: startLine
+        });
+        
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const absoluteLine = startLine + i;
+            const trimmedLine = line.trim();
+            
+            // Skip comments and empty lines
+            if (trimmedLine.startsWith('//') || trimmedLine.startsWith('/*') || trimmedLine === '') {
+                continue;
+            }
+            
+            // C# await calls
+            if (/await\s+/.test(line)) {
+                const match = line.match(/await\s+(?:this\.)?([a-zA-Z_][a-zA-Z0-9_.]*)\s*[<(]/);
+                if (match) {
+                    callStack.push({
+                        step: step++,
+                        method: match[1],
+                        description: this.describeMethodCall(match[1], line),
+                        line: absoluteLine
+                    });
+                }
+            }
+            
+            // C# method calls: this.MethodName( or ClassName.MethodName(
+            const methodCallMatches = line.matchAll(/(?:this\.|[A-Z][a-zA-Z0-9]*\.)([A-Z][a-zA-Z0-9]*)\s*[<(]/g);
+            for (const match of methodCallMatches) {
+                const methodName = match[1];
+                // Filter out common non-method patterns
+                if (!['ToString', 'GetType', 'Equals', 'GetHashCode', 'Format', 'Join', 'Split'].includes(methodName)) {
+                    if (!callStack.some(c => c.line === absoluteLine && c.method === methodName)) {
+                        callStack.push({
+                            step: step++,
+                            method: methodName,
+                            description: this.describeMethodCall(methodName, line),
+                            line: absoluteLine
+                        });
+                    }
+                }
+            }
+            
+            // Service/Manager calls: serviceName.Method(
+            const serviceCallMatch = line.match(/([a-z][a-zA-Z0-9]*(?:Service|Manager|Client|Provider|Helper|Repository))\s*\.\s*([A-Z][a-zA-Z0-9]*)\s*[<(]/i);
+            if (serviceCallMatch) {
+                const fullCall = `${serviceCallMatch[1]}.${serviceCallMatch[2]}`;
+                if (!callStack.some(c => c.method === fullCall)) {
+                    callStack.push({
+                        step: step++,
+                        method: fullCall,
+                        description: this.describeMethodCall(serviceCallMatch[2], line),
+                        line: absoluteLine
+                    });
+                }
+            }
+            
+            // HTTP/API calls
+            if (/\.(Get|Post|Put|Delete|Patch|Send)Async|\.(Get|Post|Put|Delete|Patch)\s*[<(]/.test(line)) {
+                const match = line.match(/\.(\w+(?:Async)?)\s*[<(]/);
+                if (match && !callStack.some(c => c.line === absoluteLine && c.method.includes('HTTP'))) {
+                    callStack.push({
+                        step: step++,
+                        method: `HTTP.${match[1]}`,
+                        description: 'External API Call',
+                        line: absoluteLine
+                    });
+                }
+            }
+            
+            // Graph API calls
+            if (/GraphServiceClient|\.Users|\.Groups|\.Teams|\.Channels|\.Sites/.test(line)) {
+                const apiMatch = line.match(/\.(Users|Groups|Teams|Channels|Sites|Me|Drives)[.\[]/);
+                if (apiMatch) {
+                    callStack.push({
+                        step: step++,
+                        method: `Graph.${apiMatch[1]}`,
+                        description: 'Microsoft Graph API Call',
+                        line: absoluteLine
+                    });
+                }
+            }
+            
+            // Database operations
+            if (/\.ExecuteNonQuery|\.ExecuteReader|\.SaveChanges|\.Add\(|\.Update\(|\.Delete\(|\.Find\(|\.FirstOrDefault|\.Where\(/.test(line)) {
+                const dbMatch = line.match(/\.(\w+)\s*[<(]/);
+                if (dbMatch) {
+                    callStack.push({
+                        step: step++,
+                        method: `DB.${dbMatch[1]}`,
+                        description: 'Database Operation',
+                        line: absoluteLine
+                    });
+                }
+            }
+
+            // Logging
+            if (/\.(Log|Debug|Info|Warn|Error|Fatal|Trace)\s*\(|Logger\.|SPDiagnosticsCategory/.test(line)) {
+                // Skip logging calls for call stack
+                continue;
+            }
+        }
+        
+        return callStack;
+    }
+
+    /**
+     * Describe what a method call does based on its name
+     */
+    private describeMethodCall(methodName: string, context: string): string {
+        const lowerName = methodName.toLowerCase();
+        
+        if (lowerName.includes('get')) return 'Retrieve data';
+        if (lowerName.includes('create') || lowerName.includes('add')) return 'Create resource';
+        if (lowerName.includes('update') || lowerName.includes('set')) return 'Update resource';
+        if (lowerName.includes('delete') || lowerName.includes('remove')) return 'Delete resource';
+        if (lowerName.includes('ensure')) return 'Ensure resource exists';
+        if (lowerName.includes('provision')) return 'Provision resource';
+        if (lowerName.includes('send')) return 'Send request/notification';
+        if (lowerName.includes('validate') || lowerName.includes('check')) return 'Validation';
+        if (lowerName.includes('auth') || lowerName.includes('token')) return 'Authentication';
+        
+        return 'Method call';
+    }
+
+    /**
+     * Infer permissions from API endpoint
+     */
+    private inferPermissionsFromEndpoint(endpoint: string): string[] {
+        const perms: string[] = [];
+        const lower = endpoint.toLowerCase();
+        
+        if (lower.includes('/users')) perms.push('User.Read.All');
+        if (lower.includes('/groups')) perms.push('Group.ReadWrite.All');
+        if (lower.includes('/teams')) perms.push('Team.ReadBasic.All', 'TeamSettings.ReadWrite.All');
+        if (lower.includes('/channels')) perms.push('Channel.ReadBasic.All');
+        if (lower.includes('/sites')) perms.push('Sites.Read.All');
+        if (lower.includes('/drives') || lower.includes('/items')) perms.push('Files.ReadWrite.All');
+        if (lower.includes('/mail') || lower.includes('/messages')) perms.push('Mail.ReadWrite');
+        if (lower.includes('/calendars') || lower.includes('/events')) perms.push('Calendars.ReadWrite');
+        if (lower.includes('/chats')) perms.push('Chat.ReadWrite');
+        if (lower.includes('/applications')) perms.push('Application.ReadWrite.All');
+        
+        return perms;
+    }
+
+    /**
+     * Extract description from comments near the scenario
+     */
+    private extractScenarioDescription(lines: string[], scenarioLine: number): string {
+        const lineIndex = scenarioLine - 1;
+        const comments: string[] = [];
+        
+        // Look for comments above the scenario line
+        for (let i = lineIndex - 1; i >= Math.max(0, lineIndex - 10); i--) {
+            const line = lines[i].trim();
+            if (line.startsWith('//') || line.startsWith('*') || line.startsWith('///')) {
+                comments.unshift(line.replace(/^\/\/\s*|^\*\s*|^\/\/\/\s*/, ''));
+            } else if (line === '' || line === '/*' || line === '/**') {
+                continue;
+            } else {
+                break;
+            }
+        }
+        
+        return comments.join(' ').trim() || 'No description available';
+    }
+
+    /**
+     * Generate the security review document
+     */
+    private generateScenarioSecurityDocument(params: {
+        scenarioName: string;
+        scenarioDescription: string;
+        filePath: string;
+        scenarioLine: number;
+        scenarioCode: string;
+        callStack: { step: number; method: string; description: string; line: number }[];
+        analysis: {
+            apis: { name: string; endpoint: string; method: string; line: number }[];
+            permissions: { scope: string; reason: string }[];
+            methodCalls: { name: string; line: number }[];
+        };
+    }): string {
+        const { scenarioName, scenarioDescription, filePath, scenarioLine, scenarioCode, callStack, analysis } = params;
+        const now = new Date().toISOString().split('T')[0];
+
+        let doc = `# Security Review: ${scenarioName}
+
+| Field | Value |
+|-------|-------|
+| **Date** | ${now} |
+| **File** | \`${filePath}\` |
+| **Line** | ${scenarioLine} |
+
+---
+
+## 1️⃣ Scenario Overview (场景描述)
+
+${scenarioDescription}
+
+### Source Code
+
+\`\`\`csharp
+${scenarioCode}
+\`\`\`
+
+---
+
+## 2️⃣ Permissions & Scopes (权限与 Scope)
+
+`;
+
+        if (analysis.permissions.length > 0) {
+            doc += `| Permission / Scope | Reason |
+|-------------------|--------|
+`;
+            for (const p of analysis.permissions) {
+                doc += `| \`${p.scope}\` | ${p.reason} |
+`;
+            }
+        } else {
+            doc += `_No explicit permissions detected. Manual review required._
+`;
+        }
+
+        doc += `
+---
+
+## 3️⃣ Call Stack / Workflow (调用栈)
+
+`;
+
+        if (callStack.length > 0) {
+            doc += `| Step | Method | Description | Line |
+|------|--------|-------------|------|
+`;
+            for (const call of callStack) {
+                doc += `| ${call.step} | \`${call.method}\` | ${call.description} | ${call.line} |
+`;
+            }
+            
+            // Add Mermaid diagram
+            doc += `
+### Sequence Diagram
+
+\`\`\`mermaid
+sequenceDiagram
+    participant Client
+    participant Scenario as ${scenarioName}
+`;
+            const uniqueMethods = [...new Set(callStack.map(c => c.method))].slice(0, 8);
+            for (const m of uniqueMethods) {
+                if (m !== scenarioName) {
+                    doc += `    participant ${m.replace(/[^a-zA-Z0-9]/g, '')}\n`;
+                }
+            }
+            doc += `    Client->>Scenario: Request\n`;
+            for (let i = 1; i < callStack.length && i < 8; i++) {
+                const call = callStack[i];
+                const methodName = call.method.replace(/[^a-zA-Z0-9]/g, '');
+                doc += `    Scenario->>${methodName}: ${call.description}\n`;
+            }
+            doc += `    Scenario-->>Client: Response\n\`\`\`
+`;
+        } else {
+            doc += `_No significant method calls detected._
+`;
+        }
+
+        doc += `
+---
+
+## 4️⃣ Underlying APIs & Response (底层 API 与 Response)
+
+`;
+
+        if (analysis.apis.length > 0) {
+            for (const api of analysis.apis) {
+                doc += `### ${api.name}
+
+- **Endpoint**: \`${api.method} ${api.endpoint}\`
+- **Line**: ${api.line}
+- **Expected Response**:
+
+\`\`\`json
+${this.inferResponseBody({ api: api.name, endpoint: api.endpoint, method: api.method, file: filePath, line: api.line, permissions: [], scopes: [] })}
+\`\`\`
+
+---
+
+`;
+            }
+        } else {
+            doc += `_No external API calls detected in this scenario block._
+
+Review the method calls above to trace external dependencies.
+`;
+        }
+
+        // Method calls section
+        if (analysis.methodCalls.length > 0) {
+            doc += `### Internal Method Calls
+
+| Method | Line |
+|--------|------|
+`;
+            for (const m of analysis.methodCalls.slice(0, 15)) {
+                doc += `| \`${m.name}\` | ${m.line} |
+`;
+            }
+        }
+
+        doc += `
+---
+
+## ✅ Review Checklist
+
+- [ ] Scenario purpose verified
+- [ ] All permissions justified (least privilege)
+- [ ] Call stack reviewed
+- [ ] API responses contain no sensitive data leakage
+- [ ] Error handling reviewed
+
+---
+
+| Role | Name | Date |
+|------|------|------|
+| Developer | | |
+| Security Reviewer | | |
+
+_Generated by TaskAgent Security Analyzer • ${now}_
+`;
+
+        return doc;
     }
 
     private generateSummary(params: {
@@ -304,76 +879,265 @@ ${hasIssues ? '⚠️ **Action Required**: Review the security document for deta
         token?: vscode.CancellationToken
     ): Promise<string[]> {
         const files = new Set<string>();
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
 
-        // Search patterns
-        const patterns = [
-            '**/*.ts',
-            '**/*.js',
-            '**/*.tsx',
-            '**/*.jsx',
-            '**/*.py',
-            '**/*.cs',
-            '**/*.java',
-            '**/*.go',
-            '**/appsettings*.json',
-            '**/.env*',
-            '**/config*.json',
-            '**/config*.yaml',
-            '**/config*.yml',
-        ];
-
-        for (const pattern of patterns) {
-            const foundFiles = await vscode.workspace.findFiles(
-                pattern,
-                '**/node_modules/**',
-                500,
-                token
-            );
-
-            for (const file of foundFiles) {
-                files.add(vscode.workspace.asRelativePath(file));
+        // PRIORITY 1: Always start with the currently active file
+        // The scenario name is usually a line/method/identifier WITHIN the active file
+        const activeEditor = vscode.window.activeTextEditor;
+        if (activeEditor) {
+            const activeFilePath = vscode.workspace.asRelativePath(activeEditor.document.uri);
+            const activeContent = activeEditor.document.getText();
+            
+            // Check if the active file contains the scenario
+            if (activeContent.includes(scenarioName)) {
+                files.add(activeFilePath);
+                console.log(`[SecurityAnalyzer] ✓ Found scenario "${scenarioName}" in active file: ${activeFilePath}`);
+                
+                // Find the line number where scenario is defined
+                const lines = activeContent.split('\n');
+                for (let i = 0; i < lines.length; i++) {
+                    if (lines[i].includes(scenarioName)) {
+                        console.log(`[SecurityAnalyzer] Scenario found at line ${i + 1}: ${lines[i].trim().substring(0, 80)}...`);
+                        break;
+                    }
+                }
+            } else {
+                // Even if scenario name not found, still include active file as primary source
+                files.add(activeFilePath);
+                console.log(`[SecurityAnalyzer] Active file added (scenario name not directly found): ${activeFilePath}`);
             }
         }
 
-        // If entry point exists, prioritize it
+        // PRIORITY 2: Check all currently open documents
+        for (const doc of vscode.workspace.textDocuments) {
+            if (!doc.isUntitled && doc.uri.scheme === 'file') {
+                const content = doc.getText();
+                const relativePath = vscode.workspace.asRelativePath(doc.uri);
+                
+                // Check if this document contains the scenario
+                if (content.includes(scenarioName)) {
+                    files.add(relativePath);
+                    console.log(`[SecurityAnalyzer] Found scenario in open document: ${relativePath}`);
+                }
+                
+                // Also check for keywords
+                if (keywords.some(kw => content.includes(kw))) {
+                    files.add(relativePath);
+                }
+            }
+        }
+
+        // PRIORITY 3: If entry point is specified, add it
         if (entryPoint) {
             const entryFile = entryPoint.split(':')[0];
-            if (!files.has(entryFile)) {
-                files.add(entryFile);
+            files.add(entryFile);
+            console.log(`[SecurityAnalyzer] Added entry point file: ${entryFile}`);
+        }
+
+        // If we already found files containing the scenario, we can be more targeted
+        if (files.size > 0) {
+            console.log(`[SecurityAnalyzer] Found ${files.size} files containing scenario directly`);
+            
+            // Now search for related files based on imports/references in found files
+            await this.findRelatedFiles(files, scenarioName, keywords, token);
+        }
+
+        // PRIORITY 4: If still no files, search workspace (fallback)
+        if (files.size === 0 && workspaceFolder) {
+            console.log(`[SecurityAnalyzer] No files found in active/open documents, searching workspace...`);
+            await this.searchWorkspaceForScenario(files, scenarioName, keywords, token);
+        }
+
+        // Add config files if workspace exists
+        if (workspaceFolder) {
+            const configPatterns = ['**/appsettings*.json', '**/.env*', '**/config*.json', '**/config*.yaml'];
+            for (const pattern of configPatterns) {
+                try {
+                    const configFiles = await vscode.workspace.findFiles(pattern, '**/node_modules/**', 5, token);
+                    for (const file of configFiles) {
+                        files.add(vscode.workspace.asRelativePath(file));
+                    }
+                } catch {
+                    // Skip
+                }
             }
         }
 
+        console.log(`[SecurityAnalyzer] Total files to analyze: ${files.size}`);
         return Array.from(files);
+    }
+
+    /**
+     * Find files related to the scenario (imports, references)
+     */
+    private async findRelatedFiles(
+        files: Set<string>,
+        scenarioName: string,
+        keywords: string[],
+        token?: vscode.CancellationToken
+    ): Promise<void> {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (!workspaceFolder) return;
+
+        // Extract class/method names from scenario for searching related files
+        const searchTerms = [
+            scenarioName,
+            ...scenarioName.split(/(?=[A-Z])/).filter(s => s.length > 3),
+            ...keywords
+        ];
+
+        const codePatterns = ['**/*.ts', '**/*.js', '**/*.cs', '**/*.java', '**/*.py'];
+
+        for (const term of searchTerms.slice(0, 5)) { // Limit to avoid too many searches
+            if (token?.isCancellationRequested) break;
+            if (term.length < 4) continue;
+
+            try {
+                for (const pattern of codePatterns) {
+                    const foundFiles = await vscode.workspace.findFiles(pattern, '**/node_modules/**', 50, token);
+                    
+                    for (const file of foundFiles) {
+                        if (files.size > 30) break;
+                        
+                        try {
+                            const doc = await vscode.workspace.openTextDocument(file);
+                            const content = doc.getText();
+                            
+                            if (content.includes(term)) {
+                                files.add(vscode.workspace.asRelativePath(file));
+                            }
+                        } catch {
+                            // Skip
+                        }
+                    }
+                }
+            } catch (e) {
+                console.log(`[SecurityAnalyzer] Error searching for related files: ${e}`);
+            }
+        }
+    }
+
+    /**
+     * Fallback: Search entire workspace for scenario
+     */
+    private async searchWorkspaceForScenario(
+        files: Set<string>,
+        scenarioName: string,
+        keywords: string[],
+        token?: vscode.CancellationToken
+    ): Promise<void> {
+        const searchTerms = [
+            scenarioName,
+            ...scenarioName.split(/(?=[A-Z])/).filter(s => s.length > 2),
+            ...keywords
+        ];
+
+        const codePatterns = ['**/*.ts', '**/*.js', '**/*.tsx', '**/*.jsx', '**/*.cs', '**/*.java', '**/*.py', '**/*.go'];
+
+        for (const term of searchTerms) {
+            if (token?.isCancellationRequested) break;
+            if (term.length < 3) continue;
+
+            try {
+                for (const pattern of codePatterns) {
+                    const foundFiles = await vscode.workspace.findFiles(pattern, '**/node_modules/**', 100, token);
+                    
+                    for (const file of foundFiles) {
+                        if (files.size > 50) break;
+                        
+                        try {
+                            const doc = await vscode.workspace.openTextDocument(file);
+                            const content = doc.getText();
+                            
+                            if (content.includes(term) || content.toLowerCase().includes(term.toLowerCase())) {
+                                files.add(vscode.workspace.asRelativePath(file));
+                            }
+                        } catch {
+                            // Skip
+                        }
+                    }
+                }
+            } catch (e) {
+                console.log(`[SecurityAnalyzer] Error in workspace search: ${e}`);
+            }
+        }
     }
 
     private async analyzeFile(
         filePath: string,
-        token?: vscode.CancellationToken
+        token?: vscode.CancellationToken,
+        scenarioName?: string
     ): Promise<{
         externalAPIs: ExternalAPICall[];
         credentials: CredentialUsage[];
         callChain: CallChainNode[];
         dataFlow: DataFlowPoint[];
+        scenarioContext?: {
+            startLine: number;
+            endLine: number;
+            methodName: string;
+        };
     }> {
         const externalAPIs: ExternalAPICall[] = [];
         const credentials: CredentialUsage[] = [];
         const callChain: CallChainNode[] = [];
         const dataFlow: DataFlowPoint[] = [];
+        let scenarioContext: { startLine: number; endLine: number; methodName: string } | undefined;
 
         try {
-            const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-            if (!workspaceFolder) return { externalAPIs, credentials, callChain, dataFlow };
+            // Try to open file from active editor first (handles files outside workspace)
+            let document: vscode.TextDocument | undefined;
+            const activeEditor = vscode.window.activeTextEditor;
+            
+            if (activeEditor && vscode.workspace.asRelativePath(activeEditor.document.uri) === filePath) {
+                document = activeEditor.document;
+            } else {
+                // Try workspace folder
+                const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+                if (workspaceFolder) {
+                    const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, filePath);
+                    try {
+                        document = await vscode.workspace.openTextDocument(fileUri);
+                    } catch {
+                        // Try as absolute path
+                        try {
+                            document = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+                        } catch {
+                            // Skip
+                        }
+                    }
+                }
+            }
 
-            const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, filePath);
-            const document = await vscode.workspace.openTextDocument(fileUri);
+            if (!document) {
+                return { externalAPIs, credentials, callChain, dataFlow };
+            }
+
             const content = document.getText();
             const lines = content.split('\n');
+
+            // If scenarioName is provided, find and focus on the scenario block
+            if (scenarioName) {
+                scenarioContext = this.findScenarioContext(lines, scenarioName);
+                if (scenarioContext) {
+                    console.log(`[SecurityAnalyzer] Found scenario "${scenarioName}" at lines ${scenarioContext.startLine}-${scenarioContext.endLine}`);
+                }
+            }
 
             // Analyze external API calls
             externalAPIs.push(...this.findExternalAPIs(content, filePath, lines));
 
-            // Analyze credential usage
+            // Analyze credential usage (basic patterns)
             credentials.push(...this.findCredentials(content, filePath, lines));
+
+            // NEW: Analyze OAuth/MSAL flows
+            credentials.push(...this.findOAuthFlows(content, filePath, lines));
+
+            // NEW: Analyze HTTP header security
+            credentials.push(...this.findHttpHeaders(content, filePath, lines));
+
+            // NEW: Analyze token handling
+            credentials.push(...this.findTokenHandling(content, filePath, lines));
 
             // Analyze call chain (simplified - LSP can provide more accurate info)
             callChain.push(...this.findCallChain(content, filePath, lines));
@@ -381,11 +1145,80 @@ ${hasIssues ? '⚠️ **Action Required**: Review the security document for deta
             // Analyze data flow
             dataFlow.push(...this.findDataFlow(content, filePath));
 
-        } catch {
-            // File unreadable, skip
+        } catch (e) {
+            console.log(`[SecurityAnalyzer] Error analyzing file ${filePath}: ${e}`);
         }
 
-        return { externalAPIs, credentials, callChain, dataFlow };
+        return { externalAPIs, credentials, callChain, dataFlow, scenarioContext };
+    }
+
+    /**
+     * Find the code block (method/function) containing the scenario
+     */
+    private findScenarioContext(lines: string[], scenarioName: string): { startLine: number; endLine: number; methodName: string } | undefined {
+        // Find the line containing the scenario name
+        let scenarioLine = -1;
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].includes(scenarioName)) {
+                scenarioLine = i;
+                break;
+            }
+        }
+
+        if (scenarioLine === -1) return undefined;
+
+        // Find the enclosing method/function
+        let startLine = scenarioLine;
+        let braceCount = 0;
+        let methodName = scenarioName;
+
+        // Search backwards for method start
+        for (let i = scenarioLine; i >= 0; i--) {
+            const line = lines[i];
+            
+            // Count braces going backwards
+            braceCount += (line.match(/}/g) || []).length;
+            braceCount -= (line.match(/{/g) || []).length;
+
+            // Look for method definition patterns
+            const methodMatch = line.match(/(?:public|private|protected|internal|async|static|\s)+\s*(?:\w+\s+)?(\w+)\s*\([^)]*\)\s*(?::\s*\w+)?\s*{?/);
+            if (methodMatch) {
+                startLine = i;
+                methodName = methodMatch[1] || scenarioName;
+                break;
+            }
+
+            // Also match C# style
+            const csMethodMatch = line.match(/(?:public|private|protected|internal|async|static|virtual|override|\s)+\s*(?:<[^>]+>\s*)?(\w+)\s*\([^)]*\)/);
+            if (csMethodMatch && braceCount <= 0) {
+                startLine = i;
+                methodName = csMethodMatch[1] || scenarioName;
+                break;
+            }
+        }
+
+        // Search forward for method end
+        braceCount = 0;
+        let foundStart = false;
+        let endLine = scenarioLine;
+
+        for (let i = startLine; i < lines.length; i++) {
+            const line = lines[i];
+            
+            if (line.includes('{')) {
+                foundStart = true;
+            }
+
+            braceCount += (line.match(/{/g) || []).length;
+            braceCount -= (line.match(/}/g) || []).length;
+
+            if (foundStart && braceCount <= 0) {
+                endLine = i;
+                break;
+            }
+        }
+
+        return { startLine: startLine + 1, endLine: endLine + 1, methodName };
     }
 
     private findExternalAPIs(content: string, filePath: string, lines: string[]): ExternalAPICall[] {
@@ -399,11 +1232,14 @@ ${hasIssues ? '⚠️ **Action Required**: Review the security document for deta
             /request\s*\(\s*['"`]([^'"`]+)['"`]/g,
             /\.get\s*\(\s*['"`](https?:\/\/[^'"`]+)['"`]/g,
             /\.post\s*\(\s*['"`](https?:\/\/[^'"`]+)['"`]/g,
+            /HttpClient\.(?:GetAsync|PostAsync|PutAsync|DeleteAsync)\s*\([^)]*['"`]([^'"`]+)['"`]/gi,
+            /WebRequest\.Create\s*\(\s*['"`]([^'"`]+)['"`]/gi,
         ];
 
         for (let lineNum = 0; lineNum < lines.length; lineNum++) {
             const line = lines[lineNum];
             
+            // Check URL patterns
             for (const pattern of urlPatterns) {
                 pattern.lastIndex = 0;
                 let match;
@@ -430,9 +1266,49 @@ ${hasIssues ? '⚠️ **Action Required**: Review the security document for deta
                     }
                 }
             }
+
+            // Check endpoint patterns (ASP.NET, Express, Spring)
+            for (const { pattern, type } of this.ENDPOINT_PATTERNS) {
+                pattern.lastIndex = 0;
+                let match;
+                while ((match = pattern.exec(line)) !== null) {
+                    const method = match[1] || 'UNKNOWN';
+                    const route = match[2] || match[1] || '';
+                    
+                    apis.push({
+                        api: type,
+                        endpoint: route,
+                        method: method.toUpperCase(),
+                        file: filePath,
+                        line: lineNum + 1,
+                        permissions: this.inferPermissionsFromRoute(route),
+                        scopes: []
+                    });
+                }
+            }
         }
 
         return apis;
+    }
+
+    private inferPermissionsFromRoute(route: string): string[] {
+        const permissions: string[] = [];
+        
+        // Graph API route patterns
+        if (route.includes('/users')) permissions.push('User.Read', 'User.Read.All');
+        if (route.includes('/me')) permissions.push('User.Read');
+        if (route.includes('/groups')) permissions.push('Group.Read.All', 'Group.ReadWrite.All');
+        if (route.includes('/teams')) permissions.push('Team.ReadBasic.All', 'TeamSettings.Read.All');
+        if (route.includes('/channels')) permissions.push('Channel.ReadBasic.All', 'ChannelMessage.Read.All');
+        if (route.includes('/chats')) permissions.push('Chat.Read', 'Chat.ReadWrite');
+        if (route.includes('/sites')) permissions.push('Sites.Read.All');
+        if (route.includes('/drives') || route.includes('/items')) permissions.push('Files.Read', 'Files.ReadWrite');
+        if (route.includes('/mail') || route.includes('/messages')) permissions.push('Mail.Read', 'Mail.Send');
+        if (route.includes('/calendar') || route.includes('/events')) permissions.push('Calendars.Read', 'Calendars.ReadWrite');
+        if (route.includes('/presence')) permissions.push('Presence.Read', 'Presence.Read.All');
+        if (route.includes('/subscriptions')) permissions.push('Subscription.Read.All');
+        
+        return permissions.length > 0 ? permissions : ['Review required'];
     }
 
     private findGraphScopes(content: string, currentLine: number, lines: string[]): string[] {
@@ -1750,14 +2626,11 @@ ${hasIssues ? '⚠️ **Action Required**: Review the security document for deta
     }): string {
         const { 
             scenarioName, scenarioDescription, entryPoint, analyzedFiles,
-            externalAPIs, credentials, dataFlow, upstreamAPIs, downstreamAPIs,
-            callPath, scopeRequirements, callChain
+            externalAPIs, callChain, upstreamAPIs, downstreamAPIs,
+            callPath, scopeRequirements
         } = params;
 
         const now = new Date().toISOString().split('T')[0];
-        const criticalCreds = credentials.filter(c => c.risk === 'critical');
-        const highRiskCreds = credentials.filter(c => c.risk === 'high');
-        const piiPoints = dataFlow.filter(d => d.containsPII);
 
         let doc = `# Security Review: ${scenarioName}
 
@@ -1766,203 +2639,175 @@ ${hasIssues ? '⚠️ **Action Required**: Review the security document for deta
 | **Date** | ${now} |
 | **Entry Point** | \`${entryPoint}\` |
 | **Files Analyzed** | ${analyzedFiles.length} |
-| **Status** | 🔄 Pending Review |
-
-## Overview
-
-${scenarioDescription}
 
 ---
 
-## 📊 Scenario Sequence Diagram
+## 1️⃣ Scenario Overview (场景描述)
 
-${this.generateEnhancedMermaidDiagram(scenarioName, entryPoint, upstreamAPIs, downstreamAPIs, externalAPIs, callChain, dataFlow)}
+${scenarioDescription || '_No description provided. Please describe what this scenario does._'}
+
+### Analyzed Files
+${analyzedFiles.slice(0, 10).map(f => `- \`${f}\``).join('\n')}
+${analyzedFiles.length > 10 ? `\n_... and ${analyzedFiles.length - 10} more files_` : ''}
 
 ---
 
-## ⬆️ Upstream APIs (Who Calls This Scenario)
+## 2️⃣ Permissions & Scopes (权限与 Scope)
 
 `;
 
-        if (upstreamAPIs.length > 0) {
-            doc += `| Caller | Type | HTTP Method | Route | File | Line |
-|--------|------|-------------|-------|------|------|
+        // Collect all permissions and scopes
+        const allScopes: { scope: string; type: string; reason: string; location: string }[] = [];
+        
+        for (const req of scopeRequirements) {
+            allScopes.push({
+                scope: req.scope,
+                type: req.permissionType,
+                reason: req.reason,
+                location: req.usedIn
+            });
+        }
+
+        // Also extract from external APIs
+        for (const api of externalAPIs) {
+            for (const scope of api.scopes) {
+                if (!allScopes.some(s => s.scope === scope)) {
+                    allScopes.push({
+                        scope,
+                        type: 'delegated',
+                        reason: `${api.api} - ${api.method} ${api.endpoint}`,
+                        location: `${api.file}:${api.line}`
+                    });
+                }
+            }
+            for (const perm of api.permissions) {
+                if (!allScopes.some(s => s.scope === perm)) {
+                    allScopes.push({
+                        scope: perm,
+                        type: 'application',
+                        reason: `${api.api} - ${api.method} ${api.endpoint}`,
+                        location: `${api.file}:${api.line}`
+                    });
+                }
+            }
+        }
+
+        if (allScopes.length > 0) {
+            doc += `| Permission / Scope | Type | Reason | Location |
+|-------------------|------|--------|----------|
 `;
-            for (const api of upstreamAPIs.slice(0, 15)) {
-                doc += `| \`${api.caller}\` | ${api.callerType} | ${api.httpMethod || 'N/A'} | ${api.route || 'N/A'} | \`${api.file}\` | ${api.line} |
+            for (const s of allScopes.slice(0, 20)) {
+                doc += `| \`${s.scope}\` | ${s.type} | ${s.reason} | \`${s.location}\` |
 `;
             }
         } else {
-            doc += `_No upstream callers detected. This may be an entry point._\n`;
+            doc += `_No permissions or scopes detected. Manual review required._
+`;
         }
 
         doc += `
 ---
 
-## ⬇️ Downstream APIs (What This Scenario Calls)
+## 3️⃣ Call Stack / Workflow (调用栈)
+
+### Sequence Diagram
+
+${this.generateEnhancedMermaidDiagram(scenarioName, entryPoint, upstreamAPIs, downstreamAPIs, externalAPIs, callChain, [])}
+
+### Step-by-Step Call Path
 
 `;
 
-        if (downstreamAPIs.length > 0) {
-            doc += `| Callee | Type | API/Endpoint | File | Line |
-|--------|------|--------------|------|------|
+        if (callPath.length > 0) {
+            doc += `| Step | Action | Function | File | Permissions |
+|------|--------|----------|------|-------------|
 `;
-            for (const api of downstreamAPIs.slice(0, 15)) {
-                const endpoint = api.endpoint ? api.endpoint.substring(0, 40) : 'N/A';
-                doc += `| \`${api.callee}\` | ${api.calleeType} | ${endpoint} | \`${api.file}\` | ${api.line} |
+            for (const step of callPath) {
+                const perms = step.permissions.slice(0, 2).join(', ') || '-';
+                doc += `| ${step.step} | ${step.action} | \`${step.function}\` | \`${step.file}:${step.line}\` | ${perms} |
 `;
             }
         } else {
-            doc += `_No downstream dependencies detected._\n`;
+            // Fallback to call chain
+            doc += `| Caller | Callee | Type | File | Line |
+|--------|--------|------|------|------|
+`;
+            for (const node of callChain.slice(0, 20)) {
+                doc += `| \`${node.caller}\` | \`${node.callee}\` | ${node.type} | \`${node.file}\` | ${node.line} |
+`;
+            }
         }
 
         doc += `
 ---
 
-## 🛤️ Call Path (Step by Step)
-
-\`\`\`
-`;
-        for (const step of callPath) {
-            const perms = step.permissions.length > 0 ? ` [${step.permissions.slice(0, 2).join(', ')}]` : '';
-            doc += `Step ${step.step}: ${step.action}${perms}
-    └─ ${step.function}
-    └─ ${step.file}:${step.line}
-
-`;
-        }
-        doc += `\`\`\`
-
----
-
-## 🔑 Scope & Permission Requirements
+## 4️⃣ Underlying APIs & Response (底层 API 与 Response)
 
 `;
 
-        if (scopeRequirements.length > 0) {
-            doc += `| Scope | Type | Access Level | Reason | Used In |
-|-------|------|--------------|--------|---------|
-`;
-            for (const req of scopeRequirements) {
-                doc += `| \`${req.scope}\` | ${req.permissionType} | ${req.accessLevel} | ${req.reason} | \`${req.usedIn}\` |
-`;
-            }
-        } else {
-            doc += `_No specific scopes detected._\n`;
-        }
-
-        doc += `
----
-
-## 🚨 Key Findings
-
-`;
-
-        if (criticalCreds.length > 0) {
-            doc += `### 🔴 Critical: Hardcoded Credentials
-
-| Type | Name | File | Line |
-|------|------|------|------|
-`;
-            for (const cred of criticalCreds.slice(0, 10)) {
-                doc += `| ${cred.type} | \`${cred.name}\` | \`${cred.file}\` | ${cred.line} |
-`;
-            }
-            doc += '\n';
-        }
-
-        if (highRiskCreds.length > 0) {
-            doc += `### 🟠 High Risk: Credential Exposure
-
-| Type | Name | Source | File |
-|------|------|--------|------|
-`;
-            for (const cred of highRiskCreds.slice(0, 10)) {
-                doc += `| ${cred.type} | \`${cred.name}\` | ${cred.source} | \`${cred.file}\` |
-`;
-            }
-            doc += '\n';
-        }
-
-        if (piiPoints.length > 0) {
-            doc += `### 🟡 PII Data Flow
-
-| Location | Action | Data Type |
-|----------|--------|-----------|
-`;
-            for (const point of piiPoints.slice(0, 10)) {
-                doc += `| \`${point.location}\` | ${point.action} | ${point.dataType} |
-`;
-            }
-            doc += '\n';
-        }
-
-        if (criticalCreds.length === 0 && highRiskCreds.length === 0 && piiPoints.length === 0) {
-            doc += `✅ **No critical security issues detected.**\n\n`;
-        }
-
-        // External APIs
         if (externalAPIs.length > 0) {
-            doc += `---
-
-## 🌐 External API Calls
-
-| API | Endpoint | Method | Permissions |
-|-----|----------|--------|-------------|
-`;
-            const seen = new Set<string>();
-            for (const api of externalAPIs) {
-                const key = `${api.api}|${api.endpoint}`;
-                if (seen.has(key)) continue;
-                seen.add(key);
-                if (seen.size > 15) break;
+            for (const api of this.deduplicateAPIs(externalAPIs).slice(0, 15)) {
+                const scopes = [...api.permissions, ...api.scopes].join(', ') || 'N/A';
                 
-                const perms = [...api.permissions, ...api.scopes].slice(0, 3).join(', ') || 'N/A';
-                const shortEndpoint = api.endpoint.length > 40 ? api.endpoint.substring(0, 40) + '...' : api.endpoint;
-                doc += `| ${api.api} | \`${shortEndpoint}\` | ${api.method} | ${perms} |
+                doc += `### ${api.api}
+
+- **Endpoint**: \`${api.method} ${api.endpoint}\`
+- **Location**: \`${api.file}:${api.line}\`
+- **Required Scopes**: ${scopes}
+
+**Expected Response Body**:
+\`\`\`json
+${this.inferResponseBody(api)}
+\`\`\`
+
+---
+
+`;
+            }
+        } else {
+            doc += `_No external API calls detected._
+
+`;
+        }
+
+        // Internal service calls
+        const internalCalls = downstreamAPIs.filter(d => d.calleeType === 'internal');
+        const dbCalls = downstreamAPIs.filter(d => d.calleeType === 'database');
+
+        if (internalCalls.length > 0) {
+            doc += `### Internal Service Calls
+
+| Service | File | Line |
+|---------|------|------|
+`;
+            for (const call of internalCalls.slice(0, 10)) {
+                doc += `| \`${call.callee}\` | \`${call.file}\` | ${call.line} |
 `;
             }
             doc += '\n';
         }
 
-        // Recommendations
-        doc += `---
+        if (dbCalls.length > 0) {
+            doc += `### Database Operations
 
-## 📋 Recommendations
-
+| Operation | File | Line |
+|-----------|------|------|
 `;
-        const recommendations: string[] = [];
-
-        if (criticalCreds.length > 0) {
-            recommendations.push(`🔴 **Move ${criticalCreds.length} hardcoded credential(s) to Azure Key Vault**`);
-        }
-        if (externalAPIs.some(a => a.api.includes('Deprecated'))) {
-            recommendations.push(`🟠 **Migrate from deprecated Azure AD Graph to Microsoft Graph**`);
-        }
-        if (piiPoints.length > 0) {
-            recommendations.push(`🟡 **Review PII handling for GDPR/privacy compliance**`);
-        }
-        if (scopeRequirements.some(s => s.accessLevel === 'admin')) {
-            recommendations.push(`🟡 **Review admin-level permissions - ensure least privilege**`);
-        }
-        if (recommendations.length === 0) {
-            recommendations.push(`✅ No critical issues. Proceed with standard security review.`);
+            for (const call of dbCalls.slice(0, 10)) {
+                doc += `| \`${call.callee}\` | \`${call.file}\` | ${call.line} |
+`;
+            }
+            doc += '\n';
         }
 
-        for (const rec of recommendations) {
-            doc += `- ${rec}\n`;
-        }
-
-        doc += `
----
+        doc += `---
 
 ## ✅ Review Checklist
 
-- [ ] Upstream callers verified
-- [ ] Downstream dependencies reviewed
-- [ ] All scopes justified (least privilege)
-- [ ] Credentials stored securely
-- [ ] PII handling compliant
+- [ ] Scenario purpose verified
+- [ ] All permissions justified (least privilege)
+- [ ] Call stack reviewed
+- [ ] API responses contain no sensitive data leakage
 - [ ] Error handling reviewed
 
 ---
@@ -1972,10 +2817,103 @@ ${this.generateEnhancedMermaidDiagram(scenarioName, entryPoint, upstreamAPIs, do
 | Developer | | |
 | Security Reviewer | | |
 
-_Generated by TaskAgent • ${now}_
+_Generated by TaskAgent Security Analyzer • ${now}_
 `;
 
         return doc;
+    }
+
+    /**
+     * Deduplicate APIs by endpoint
+     */
+    private deduplicateAPIs(apis: ExternalAPICall[]): ExternalAPICall[] {
+        const seen = new Map<string, ExternalAPICall>();
+        for (const api of apis) {
+            const key = `${api.api}|${api.method}|${api.endpoint}`;
+            if (!seen.has(key)) {
+                seen.set(key, api);
+            }
+        }
+        return Array.from(seen.values());
+    }
+
+    /**
+     * Infer expected response body based on API endpoint
+     */
+    private inferResponseBody(api: ExternalAPICall): string {
+        const endpoint = api.endpoint.toLowerCase();
+        
+        // Microsoft Graph API responses
+        if (api.api.includes('Graph')) {
+            if (endpoint.includes('/users') || endpoint.includes('/me')) {
+                return `{
+  "@odata.context": "...",
+  "id": "user-guid",
+  "displayName": "User Name",
+  "mail": "user@example.com",
+  "userPrincipalName": "user@example.com"
+}`;
+            }
+            if (endpoint.includes('/groups')) {
+                return `{
+  "@odata.context": "...",
+  "id": "group-guid",
+  "displayName": "Group Name",
+  "description": "...",
+  "members@odata.count": 10
+}`;
+            }
+            if (endpoint.includes('/teams')) {
+                return `{
+  "@odata.context": "...",
+  "id": "team-guid",
+  "displayName": "Team Name",
+  "description": "...",
+  "isArchived": false
+}`;
+            }
+            if (endpoint.includes('/channels')) {
+                return `{
+  "@odata.context": "...",
+  "id": "channel-guid",
+  "displayName": "Channel Name",
+  "membershipType": "standard"
+}`;
+            }
+            if (endpoint.includes('/messages') || endpoint.includes('/chats')) {
+                return `{
+  "@odata.context": "...",
+  "id": "message-guid",
+  "body": { "content": "..." },
+  "from": { "user": { "displayName": "..." } }
+}`;
+            }
+            if (endpoint.includes('/drives') || endpoint.includes('/items')) {
+                return `{
+  "@odata.context": "...",
+  "id": "item-guid",
+  "name": "filename.docx",
+  "size": 12345,
+  "webUrl": "https://..."
+}`;
+            }
+        }
+
+        // Azure APIs
+        if (api.api.includes('Azure')) {
+            return `{
+  "id": "/subscriptions/.../resource-id",
+  "name": "resource-name",
+  "type": "Microsoft.../resourceType",
+  "properties": { ... }
+}`;
+        }
+
+        // Generic REST response
+        return `{
+  "status": "success",
+  "data": { ... }
+}`;
     }
 
     /**
@@ -2076,7 +3014,295 @@ _Generated by TaskAgent • ${now}_
         diagram += '```';
         return diagram;
     }
+
+    // ============================================
+    // Enhanced Analysis Methods for Call Stack, Tokens, OAuth, and Headers
+    // ============================================
+
+    /**
+     * Find OAuth/MSAL authentication flows in the code
+     */
+    private findOAuthFlows(content: string, filePath: string, lines: string[]): CredentialUsage[] {
+        const oauthFlows: CredentialUsage[] = [];
+        
+        const oauthPatterns = [
+            { pattern: /AcquireTokenAsync|AcquireTokenSilent|AcquireTokenInteractive/gi, type: 'MSAL Token Acquisition' },
+            { pattern: /GetTokenAsync|GetAccessTokenAsync/gi, type: 'Token Fetch' },
+            { pattern: /ConfidentialClientApplicationBuilder|PublicClientApplicationBuilder/gi, type: 'MSAL Client Builder' },
+            { pattern: /client_credentials|authorization_code|refresh_token|implicit|password/gi, type: 'OAuth Grant Type' },
+            { pattern: /\.WithClientSecret\(|\.WithCertificate\(/gi, type: 'Client Auth Method' },
+            { pattern: /TokenCredential|DefaultAzureCredential|ManagedIdentityCredential/gi, type: 'Azure Identity' },
+            { pattern: /OnBehalfOfCredential|ClientSecretCredential|ClientCertificateCredential/gi, type: 'Azure Credential Type' },
+            { pattern: /ITokenAcquisition|IAuthenticationResult/gi, type: 'Token Interface' },
+            { pattern: /\.Scopes\s*=|\.AddScopes\(|WithScopes\(/gi, type: 'Scope Configuration' },
+        ];
+
+        for (let lineNum = 0; lineNum < lines.length; lineNum++) {
+            const line = lines[lineNum];
+            
+            for (const { pattern, type } of oauthPatterns) {
+                pattern.lastIndex = 0;
+                if (pattern.test(line)) {
+                    const risk = this.assessOAuthRisk(line, lines, lineNum);
+                    oauthFlows.push({
+                        type,
+                        name: this.extractVariableName(line),
+                        source: this.determineOAuthSource(line, lines, lineNum),
+                        file: filePath,
+                        line: lineNum + 1,
+                        risk
+                    });
+                }
+            }
+        }
+
+        return oauthFlows;
+    }
+
+    private assessOAuthRisk(line: string, lines: string[], lineNum: number): 'critical' | 'high' | 'medium' | 'low' {
+        // Check for hardcoded secrets
+        if (/['"][a-zA-Z0-9~_-]{30,}['"]/i.test(line)) return 'critical';
+        // Check for insecure grant types
+        if (/password|implicit/i.test(line)) return 'high';
+        // Check for client credentials in code
+        if (/client_credentials/i.test(line) && !/.env|config/i.test(line)) return 'high';
+        // Managed identity is low risk
+        if (/ManagedIdentity|DefaultAzureCredential/i.test(line)) return 'low';
+        return 'medium';
+    }
+
+    private determineOAuthSource(line: string, lines: string[], lineNum: number): string {
+        if (/Configuration|IOptions|appsettings/i.test(line)) return 'Configuration';
+        if (/Environment\.|process\.env|os\.environ/i.test(line)) return 'Environment Variable';
+        if (/KeyVault|SecretClient/i.test(line)) return 'Azure Key Vault';
+        if (/ManagedIdentity/i.test(line)) return 'Managed Identity';
+        if (/['"][a-zA-Z0-9~_-]{20,}['"]/i.test(line)) return '⚠️ HARDCODED';
+        return 'Code';
+    }
+
+    /**
+     * Find HTTP Header configurations and security-sensitive headers
+     */
+    private findHttpHeaders(content: string, filePath: string, lines: string[]): CredentialUsage[] {
+        const headerFindings: CredentialUsage[] = [];
+        
+        const headerPatterns = [
+            { pattern: /Authorization\s*[:=]\s*['"`]Bearer\s+([^'"`]+)['"`]/gi, type: 'Bearer Token Header' },
+            { pattern: /['"](x-api-key|api-key|apikey)['"]\s*[:=]/gi, type: 'API Key Header' },
+            { pattern: /['"]Authorization['"]\s*[:=]\s*['"`]Basic\s+/gi, type: 'Basic Auth Header' },
+            { pattern: /\.DefaultRequestHeaders\.Authorization/gi, type: 'HttpClient Auth Header' },
+            { pattern: /AddDefaultHeader\s*\(\s*['"]Authorization['"]/gi, type: 'Default Auth Header' },
+            { pattern: /headers\s*\[\s*['"]Authorization['"]\s*\]/gi, type: 'Auth Header Assignment' },
+            { pattern: /\.SetBearerToken\(/gi, type: 'Bearer Token Setup' },
+            { pattern: /X-Forwarded-|X-Real-IP|X-Client-/gi, type: 'Proxy Header' },
+            { pattern: /CORS|Access-Control-Allow/gi, type: 'CORS Header' },
+        ];
+
+        for (let lineNum = 0; lineNum < lines.length; lineNum++) {
+            const line = lines[lineNum];
+            
+            for (const { pattern, type } of headerPatterns) {
+                pattern.lastIndex = 0;
+                if (pattern.test(line)) {
+                    const risk = this.assessHeaderRisk(line, type);
+                    headerFindings.push({
+                        type,
+                        name: this.extractVariableName(line),
+                        source: this.determineHeaderSource(line),
+                        file: filePath,
+                        line: lineNum + 1,
+                        risk
+                    });
+                }
+            }
+        }
+
+        return headerFindings;
+    }
+
+    private assessHeaderRisk(line: string, type: string): 'critical' | 'high' | 'medium' | 'low' {
+        if (type === 'Basic Auth Header') return 'high'; // Basic auth is less secure
+        if (/['"][A-Za-z0-9+/=]{30,}['"]/i.test(line)) return 'critical'; // Hardcoded token
+        if (/\*|Access-Control-Allow-Origin:\s*\*/i.test(line)) return 'high'; // Open CORS
+        return 'medium';
+    }
+
+    private determineHeaderSource(line: string): string {
+        if (/\$\{|\+\s*\w+|`\$\{/i.test(line)) return 'Variable Interpolation';
+        if (/['"][A-Za-z0-9+/=]{30,}['"]/i.test(line)) return '⚠️ HARDCODED TOKEN';
+        if (/token|credential|secret/i.test(line)) return 'Token Variable';
+        return 'Code';
+    }
+
+    /**
+     * Find token handling patterns (creation, storage, validation)
+     */
+    private findTokenHandling(content: string, filePath: string, lines: string[]): CredentialUsage[] {
+        const tokenFindings: CredentialUsage[] = [];
+        
+        const tokenPatterns = [
+            { pattern: /JWT|JsonWebToken|JwtSecurityToken/gi, type: 'JWT Token' },
+            { pattern: /CreateToken|GenerateToken|SignToken/gi, type: 'Token Generation' },
+            { pattern: /ValidateToken|VerifyToken|DecodeToken/gi, type: 'Token Validation' },
+            { pattern: /\.Claims|ClaimTypes\.|ClaimsPrincipal/gi, type: 'Token Claims' },
+            { pattern: /RefreshToken|refresh_token/gi, type: 'Refresh Token' },
+            { pattern: /AccessToken|access_token/gi, type: 'Access Token' },
+            { pattern: /IdToken|id_token/gi, type: 'ID Token' },
+            { pattern: /TokenValidationParameters/gi, type: 'Token Validation Config' },
+            { pattern: /IssuerSigningKey|SymmetricSecurityKey/gi, type: 'Token Signing Key' },
+            { pattern: /localStorage\.setItem.*token|sessionStorage\.setItem.*token/gi, type: 'Client Token Storage' },
+            { pattern: /cookie.*token|token.*cookie/gi, type: 'Token in Cookie' },
+        ];
+
+        for (let lineNum = 0; lineNum < lines.length; lineNum++) {
+            const line = lines[lineNum];
+            
+            for (const { pattern, type } of tokenPatterns) {
+                pattern.lastIndex = 0;
+                if (pattern.test(line)) {
+                    const risk = this.assessTokenRisk(line, type);
+                    tokenFindings.push({
+                        type,
+                        name: this.extractVariableName(line),
+                        source: this.determineTokenSource(line, type),
+                        file: filePath,
+                        line: lineNum + 1,
+                        risk
+                    });
+                }
+            }
+        }
+
+        return tokenFindings;
+    }
+
+    private assessTokenRisk(line: string, type: string): 'critical' | 'high' | 'medium' | 'low' {
+        if (type === 'Client Token Storage' && /localStorage/i.test(line)) return 'high'; // XSS vulnerable
+        if (type === 'Token Signing Key' && /['"][a-zA-Z0-9]{10,}['"]/i.test(line)) return 'critical'; // Hardcoded key
+        if (type === 'Token in Cookie' && !/HttpOnly|Secure/i.test(line)) return 'high'; // Insecure cookie
+        if (/Refresh|refresh/i.test(type)) return 'medium'; // Refresh tokens need care
+        return 'low';
+    }
+
+    private determineTokenSource(line: string, type: string): string {
+        if (type.includes('Client Token Storage')) return 'Browser Storage';
+        if (type.includes('Cookie')) return 'HTTP Cookie';
+        if (type.includes('Generation') || type.includes('Signing')) return 'Server Generation';
+        if (type.includes('Validation')) return 'Token Validation';
+        return 'Code';
+    }
+
+    private extractVariableName(line: string): string {
+        // Try to extract variable name from assignment
+        const patterns = [
+            /(?:const|let|var|private|public|protected)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*[:=]/,
+            /([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*/,
+            /\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/,
+        ];
+        
+        for (const pattern of patterns) {
+            const match = line.match(pattern);
+            if (match && match[1]) return match[1];
+        }
+        
+        return 'Unknown';
+    }
+
+    /**
+     * Enhanced call chain analysis using symbol references
+     */
+    private async findEnhancedCallChain(
+        filePath: string,
+        functionName: string,
+        lines: string[],
+        depth: number = 3
+    ): Promise<CallChainNode[]> {
+        const callChain: CallChainNode[] = [];
+        
+        // Find function definition
+        const funcPattern = new RegExp(`(?:async\\s+)?(?:function\\s+)?${functionName}\\s*(?:<[^>]+>)?\\s*\\([^)]*\\)`, 'gi');
+        let funcStartLine = -1;
+        let funcEndLine = -1;
+        let braceCount = 0;
+        let inFunction = false;
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            
+            if (!inFunction && funcPattern.test(line)) {
+                funcStartLine = i;
+                inFunction = true;
+                braceCount = 0;
+            }
+            
+            if (inFunction) {
+                braceCount += (line.match(/{/g) || []).length;
+                braceCount -= (line.match(/}/g) || []).length;
+                
+                if (braceCount <= 0 && funcStartLine !== i) {
+                    funcEndLine = i;
+                    break;
+                }
+            }
+        }
+
+        if (funcStartLine >= 0 && funcEndLine >= 0) {
+            // Extract calls within this function
+            for (let i = funcStartLine; i <= funcEndLine; i++) {
+                const line = lines[i];
+                
+                // Find method calls
+                const callPatterns = [
+                    /await\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s*\(/g,
+                    /([a-zA-Z_][a-zA-Z0-9_.]+)\s*\(/g,
+                ];
+
+                for (const pattern of callPatterns) {
+                    pattern.lastIndex = 0;
+                    let match;
+                    while ((match = pattern.exec(line)) !== null) {
+                        const callee = match[1];
+                        
+                        // Skip common control flow
+                        if (['if', 'for', 'while', 'switch', 'catch', 'function', 'return', 'new', 'console', 'Math'].includes(callee.split('.')[0])) {
+                            continue;
+                        }
+
+                        let type: 'function' | 'api' | 'external' | 'database' = 'function';
+                        if (/fetch|axios|http|request|client/i.test(callee)) type = 'api';
+                        if (/query|execute|find|save|insert|update|delete|repository/i.test(callee)) type = 'database';
+                        if (/Graph|Azure|AWS|External/i.test(callee)) type = 'external';
+
+                        callChain.push({
+                            level: depth,
+                            caller: functionName,
+                            callee,
+                            file: filePath,
+                            line: i + 1,
+                            type
+                        });
+                    }
+                }
+            }
+        }
+
+        return callChain;
+    }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

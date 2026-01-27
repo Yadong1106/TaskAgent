@@ -10,6 +10,11 @@ import { NoteTakingTool } from './noteTaking';
 import { CodeSearchTool, FindFilesTool, ReadFileTool, GetSymbolsTool } from './codeSearch';
 import { SecurityReviewTool } from './securityReview';
 import { ScenarioSecurityAnalyzer } from './scenarioSecurityAnalyzer';
+import { GitHubSearchTool } from './githubSearch';
+import { StackOverflowSearchTool } from './stackOverflowSearch';
+import { TestGeneratorTool } from './testGenerator';
+import { CodeReviewTool } from './codeReview';
+import { PreviewUITool } from './previewUI';
 
 // Global NoteTakingTool instance for inter-agent communication
 let noteTakingTool: NoteTakingTool;
@@ -94,7 +99,38 @@ export function registerAllTools(
         vscode.lm.registerTool('taskagent_analyzeScenario', new ScenarioSecurityAnalyzer())
     );
 
-    console.log('TaskAgent: All tools registered (including Scenario Security Analyzer)');
+    // ===== New Search Tools =====
+
+    // GitHub Search - Search GitHub for code, repositories, or issues
+    context.subscriptions.push(
+        vscode.lm.registerTool('taskagent_githubSearch', new GitHubSearchTool())
+    );
+
+    // Stack Overflow Search - Search Stack Overflow for programming questions
+    context.subscriptions.push(
+        vscode.lm.registerTool('taskagent_stackOverflow', new StackOverflowSearchTool())
+    );
+
+    // ===== Code Quality Tools =====
+
+    // Test Generator - Generate unit tests for source code
+    context.subscriptions.push(
+        vscode.lm.registerTool('taskagent_generateTests', new TestGeneratorTool())
+    );
+
+    // Code Review - Automated code review for security, performance, and quality
+    context.subscriptions.push(
+        vscode.lm.registerTool('taskagent_codeReview', new CodeReviewTool())
+    );
+
+    // ===== Frontend UI Tools =====
+
+    // Preview UI - Live preview of HTML/CSS/JS in a webview panel
+    context.subscriptions.push(
+        vscode.lm.registerTool('taskagent_previewUI', new PreviewUITool())
+    );
+
+    console.log('TaskAgent: All tools registered (including Preview UI)');
 }
 
 

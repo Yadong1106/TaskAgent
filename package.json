@@ -2,7 +2,7 @@
   "name": "taskagent",
   "displayName": "TaskAgent - Multi-Agent Workflow",
   "description": "Eigent-style multi-agent autonomous workflow powered by GitHub Copilot",
-  "version": "0.0.12",
+  "version": "0.0.19",
   "publisher": "yadongzhai",
   "icon": "images/icon.png",
   "engines": {
@@ -36,6 +36,18 @@
           {
             "name": "automate",
             "description": "Automate a complex multi-step task"
+          },
+          {
+            "name": "roleplay",
+            "description": "Multi-persona discussion (topic | role1, role2, role3)"
+          },
+          {
+            "name": "review",
+            "description": "Multi-perspective code review (Security, Architecture, QA)"
+          },
+          {
+            "name": "ui",
+            "description": "Create and preview frontend UI components with live preview"
           }
         ]
       }
@@ -444,6 +456,208 @@
             "scenarioName"
           ]
         }
+      },
+      {
+        "name": "taskagent_githubSearch",
+        "displayName": "GitHub Search",
+        "modelDescription": "Search GitHub for code, repositories, or issues. Use this to find open source examples, libraries, or solutions to programming problems.",
+        "toolReferenceName": "githubSearch",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(github)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "The search query"
+            },
+            "searchType": {
+              "type": "string",
+              "enum": [
+                "code",
+                "repositories",
+                "issues"
+              ],
+              "description": "Type of search: code, repositories, or issues"
+            },
+            "language": {
+              "type": "string",
+              "description": "Filter by programming language (e.g., typescript, python)"
+            },
+            "maxResults": {
+              "type": "number",
+              "description": "Maximum number of results (default: 10)"
+            }
+          },
+          "required": [
+            "query",
+            "searchType"
+          ]
+        }
+      },
+      {
+        "name": "taskagent_stackOverflow",
+        "displayName": "Stack Overflow Search",
+        "modelDescription": "Search Stack Overflow for programming questions and answers. Use this to find solutions to coding problems and best practices.",
+        "toolReferenceName": "stackOverflow",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(comment-discussion)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "The search query"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Filter by tags (e.g., ['javascript', 'react'])"
+            },
+            "sort": {
+              "type": "string",
+              "enum": [
+                "relevance",
+                "votes",
+                "creation",
+                "activity"
+              ],
+              "description": "Sort order for results"
+            },
+            "maxResults": {
+              "type": "number",
+              "description": "Maximum number of results (default: 10)"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "taskagent_generateTests",
+        "displayName": "Generate Tests",
+        "modelDescription": "Generate unit tests for source code. Analyzes functions and classes to create test templates for Jest, Mocha, Vitest, pytest, or unittest.",
+        "toolReferenceName": "generateTests",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(beaker)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "filePath": {
+              "type": "string",
+              "description": "Path to the source file to generate tests for"
+            },
+            "testFramework": {
+              "type": "string",
+              "enum": [
+                "jest",
+                "mocha",
+                "vitest",
+                "pytest",
+                "unittest"
+              ],
+              "description": "Test framework to use"
+            },
+            "testType": {
+              "type": "string",
+              "enum": [
+                "unit",
+                "integration",
+                "e2e"
+              ],
+              "description": "Type of tests to generate"
+            },
+            "functionNames": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Specific functions to generate tests for"
+            }
+          },
+          "required": [
+            "filePath"
+          ]
+        }
+      },
+      {
+        "name": "taskagent_codeReview",
+        "displayName": "Code Review",
+        "modelDescription": "Automated code review that checks for security vulnerabilities, performance issues, and code quality. Provides detailed reports with suggestions for improvement.",
+        "toolReferenceName": "codeReview",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(checklist)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "filePath": {
+              "type": "string",
+              "description": "Path to the file to review"
+            },
+            "code": {
+              "type": "string",
+              "description": "Code snippet to review (alternative to filePath)"
+            },
+            "reviewType": {
+              "type": "string",
+              "enum": [
+                "security",
+                "performance",
+                "quality",
+                "all"
+              ],
+              "description": "Type of review to perform"
+            },
+            "language": {
+              "type": "string",
+              "description": "Programming language (auto-detected from file extension)"
+            }
+          },
+          "required": []
+        }
+      },
+      {
+        "name": "taskagent_previewUI",
+        "displayName": "Preview UI",
+        "modelDescription": "Preview HTML/CSS/JavaScript code in a live webview panel. Use this to show real-time UI previews when developing frontend components. Supports vanilla JS, React, Vue, and Tailwind CSS.",
+        "toolReferenceName": "previewUI",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(preview)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "html": {
+              "type": "string",
+              "description": "HTML content to preview"
+            },
+            "css": {
+              "type": "string",
+              "description": "CSS styles to apply"
+            },
+            "javascript": {
+              "type": "string",
+              "description": "JavaScript code to execute"
+            },
+            "framework": {
+              "type": "string",
+              "enum": [
+                "vanilla",
+                "react",
+                "vue",
+                "tailwind"
+              ],
+              "description": "Frontend framework to use (default: vanilla)"
+            },
+            "title": {
+              "type": "string",
+              "description": "Title for the preview panel"
+            }
+          },
+          "required": []
+        }
       }
     ],
     "commands": [
@@ -460,6 +674,21 @@
         "title": "TaskAgent: Open Workflow Dashboard"
       }
     ],
+    "configuration": {
+      "title": "TaskAgent",
+      "properties": {
+        "taskagent.tavilyApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Tavily API key for web search. Get your free key at https://tavily.com"
+        },
+        "taskagent.githubToken": {
+          "type": "string",
+          "default": "",
+          "description": "(Optional) GitHub personal access token for higher API rate limits"
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {

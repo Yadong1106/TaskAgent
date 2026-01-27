@@ -262,7 +262,7 @@ Only output valid JSON, no other text.`)
 
     /**
      * Check if there are any subtasks that can still potentially run
-     * (not blocked by failed dependencies)
+     * (dependencies are resolved - either completed or failed)
      */
     private hasViableSubtasks(
         decomposition: TaskDecomposition,
@@ -271,12 +271,13 @@ Only output valid JSON, no other text.`)
         return decomposition.subtasks.some((subtask, index) => {
             if (status.get(index) !== 'pending') return false;
             
-            // Check if any dependency has failed - if so, this subtask is not viable
-            const hasFailedDependency = subtask.dependencies.some(
-                depIndex => status.get(depIndex) === 'failed'
-            );
+            // Check if all dependencies are resolved (completed or failed)
+            const depsResolved = subtask.dependencies.every(depIndex => {
+                const depStatus = status.get(depIndex);
+                return depStatus === 'completed' || depStatus === 'failed';
+            });
             
-            return !hasFailedDependency;
+            return depsResolved;
         });
     }
 
@@ -289,22 +290,16 @@ Only output valid JSON, no other text.`)
         decomposition.subtasks.forEach((subtask, index) => {
             if (status.get(index) !== 'pending') return;
             
-            // Check if any dependency has failed - skip this subtask if so
-            const hasFailedDependency = subtask.dependencies.some(
-                depIndex => status.get(depIndex) === 'failed'
-            );
-            if (hasFailedDependency) {
-                // Mark as failed due to dependency failure
-                status.set(index, 'failed');
-                return;
-            }
-            
-            // Check if all dependencies are completed
-            const depsCompleted = subtask.dependencies.every(
-                depIndex => status.get(depIndex) === 'completed'
+            // Check if all dependencies are satisfied (completed OR failed)
+            // We still run tasks even if dependencies failed - they may still provide value
+            const depsResolved = subtask.dependencies.every(
+                depIndex => {
+                    const depStatus = status.get(depIndex);
+                    return depStatus === 'completed' || depStatus === 'failed';
+                }
             );
             
-            if (depsCompleted) {
+            if (depsResolved) {
                 runnable.push(index);
             }
         });
@@ -357,49 +352,25 @@ Only output valid JSON, no other text.`)
                 });
             }
 
-            // Execute with agent's system prompt AND available tools
+            // Execute with agent's system prompt - NO custom tools
+            // Let the LLM use its own knowledge and reasoning
             const messages = [
                 vscode.LanguageModelChatMessage.User(agent.systemPrompt),
-                vscode.LanguageModelChatMessage.User(`Task: ${subtask.description}${context}\n\nUse the available tools to complete this task. For security reviews, use taskagent_securityReview or taskagent_analyzeScenario tool to generate and save the document.`)
+                vscode.LanguageModelChatMessage.User(`Task: ${subtask.description}${context}\n\nAnalyze and provide your response based on the context provided. Do not use any tools - just provide your analysis directly.`)
             ];
 
-            // Get all available tools so LLM can use them
-            const tools = await vscode.lm.tools;
-            const taskagentTools = tools.filter(t => t.name.startsWith('taskagent_'));
-            
-            const response = await model.sendRequest(messages, { 
-                tools: taskagentTools.length > 0 ? taskagentTools : undefined
-            }, token);
+            // Don't pass any custom tools - let LLM use its own capabilities
+            const response = await model.sendRequest(messages, {}, token);
             
             let result = '';
             
-            // Process the response stream - it may contain text and tool calls
+            // Process the response stream - text only, no tool calls
             for await (const part of response.stream) {
                 if (part instanceof vscode.LanguageModelTextPart) {
                     result += part.value;
                     stream.markdown(part.value);
-                } else if (part instanceof vscode.LanguageModelToolCallPart) {
-                    // Handle tool call
-                    stream.markdown(`\n📦 Using tool: ${part.name}\n`);
-                    try {
-                        const toolResult = await vscode.lm.invokeTool(part.name, {
-                            input: part.input,
-                            toolInvocationToken: undefined
-                        }, token);
-                        
-                        // Extract text from tool result
-                        if (toolResult && 'content' in toolResult) {
-                            for (const content of toolResult.content as any[]) {
-                                if (content.value) {
-                                    result += `\n${content.value}`;
-                                    stream.markdown(`\n${content.value}\n`);
-                                }
-                            }
-                        }
-                    } catch (toolError) {
-                        stream.markdown(`\n⚠️ Tool error: ${toolError}\n`);
-                    }
                 }
+                // Ignore any tool call parts - we don't use custom tools
             }
 
             this.taskManager.updateSubtaskStatus(parentTask.id, managedSubtask.id, 'completed', result);

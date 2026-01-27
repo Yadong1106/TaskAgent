@@ -3,6 +3,8 @@ import { Server as SocketIOServer } from 'socket.io';
 import { createServer, Server } from 'http';
 import { TaskManager } from '../core/taskManager';
 import { AgentRegistry } from '../core/agentRegistry';
+import axios from 'axios';
+import * as vscode from 'vscode';
 
 interface SearchResult {
     title: string;
@@ -186,21 +188,81 @@ export class BackendServer {
     // Private implementation methods
 
     private async performSearch(query: string, maxResults: number): Promise<SearchResult[]> {
-        // In production, integrate with a search API (Google, Bing, etc.)
-        // For now, return placeholder results
-        console.log(`Searching for: ${query}, max results: ${maxResults}`);
-        
-        // You could integrate with:
-        // - Google Custom Search API
-        // - Bing Search API
-        // - SerpAPI
-        // - Tavily
-        
-        return [{
-            title: `Search results for: ${query}`,
-            url: `https://www.google.com/search?q=${encodeURIComponent(query)}`,
-            snippet: 'Please configure a search API for real search results.'
-        }];
+        // Get Tavily API key from VS Code settings
+        const config = vscode.workspace.getConfiguration('taskagent');
+        const apiKey = config.get<string>('tavilyApiKey');
+
+        if (!apiKey) {
+            console.warn('Tavily API key not configured. Set taskagent.tavilyApiKey in settings.');
+            return [{
+                title: 'Search API not configured',
+                url: `https://www.google.com/search?q=${encodeURIComponent(query)}`,
+                snippet: 'Please set your Tavily API key in VS Code settings: taskagent.tavilyApiKey'
+            }];
+        }
+
+        try {
+            const response = await axios.post('https://api.tavily.com/search', {
+                api_key: apiKey,
+                query: query,
+                max_results: maxResults,
+                include_answer: true,
+                include_raw_content: false
+            }, {
+                timeout: 15000
+            });
+
+            const results: SearchResult[] = [];
+
+            // Add AI-generated answer if available
+            if (response.data.answer) {
+                results.push({
+                    title: 'AI Summary',
+                    url: '',
+                    snippet: response.data.answer
+                });
+            }
+
+            // Add search results
+            if (response.data.results && Array.isArray(response.data.results)) {
+                for (const item of response.data.results.slice(0, maxResults)) {
+                    results.push({
+                        title: item.title || 'No title',
+                        url: item.url || '',
+                        snippet: item.content || item.snippet || ''
+                    });
+                }
+            }
+
+            if (results.length === 0) {
+                return [{
+                    title: 'No results found',
+                    url: `https://www.google.com/search?q=${encodeURIComponent(query)}`,
+                    snippet: `No search results for: ${query}`
+                }];
+            }
+
+            return results;
+
+        } catch (error) {
+            console.error('Tavily search failed:', error);
+            const errorMsg = error instanceof Error ? error.message : String(error);
+
+            // Check for specific error types
+            if (axios.isAxiosError(error) && error.response?.status === 401) {
+                return [{
+                    title: 'Invalid API Key',
+                    url: 'https://tavily.com',
+                    snippet: 'Your Tavily API key is invalid. Please check your settings.'
+                }];
+            }
+
+            return [{
+                title: 'Search failed',
+                url: `https://www.google.com/search?q=${encodeURIComponent(query)}`,
+                snippet: `Search error: ${errorMsg}. Try searching manually.`
+            }];
+        }
     }
 
     private async browseWebpageInternal(url: string, extractType: string): Promise<string> {

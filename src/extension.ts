@@ -4,8 +4,22 @@ import { registerAllTools } from './tools';
 import { BackendServer } from './server/backendServer';
 import { TaskManager } from './core/taskManager';
 import { AgentRegistry } from './core/agentRegistry';
+import { MemoryModule } from './core/memory';
+import { DataGenerator } from './core/dataGenerator';
+import { FeedbackCollector } from './core/feedback';
+import { RolePlayEngine } from './core/rolePlay';
 
 let backendServer: BackendServer | undefined;
+let memoryModule: MemoryModule | undefined;
+let dataGenerator: DataGenerator | undefined;
+let feedbackCollector: FeedbackCollector | undefined;
+let rolePlayEngine: RolePlayEngine | undefined;
+
+// Export for use in other modules
+export function getMemoryModule(): MemoryModule | undefined { return memoryModule; }
+export function getDataGenerator(): DataGenerator | undefined { return dataGenerator; }
+export function getFeedbackCollector(): FeedbackCollector | undefined { return feedbackCollector; }
+export function getRolePlayEngine(): RolePlayEngine | undefined { return rolePlayEngine; }
 
 export async function activate(context: vscode.ExtensionContext) {
     console.log('TaskAgent is now active!');
@@ -14,11 +28,24 @@ export async function activate(context: vscode.ExtensionContext) {
     const taskManager = new TaskManager();
     const agentRegistry = new AgentRegistry();
     
+    // Initialize new modules (inspired by CAMEL framework)
+    memoryModule = new MemoryModule(context);
+    dataGenerator = new DataGenerator(context, memoryModule);
+    feedbackCollector = new FeedbackCollector(memoryModule, dataGenerator);
+    rolePlayEngine = new RolePlayEngine(memoryModule);
+    
     // Initialize backend server for browser automation and cross-app tasks
     backendServer = new BackendServer(taskManager, agentRegistry);
     
-    // Register Chat Participant
-    const workforce = new WorkforceParticipant(taskManager, agentRegistry, backendServer);
+    // Register Chat Participant (pass new modules)
+    const workforce = new WorkforceParticipant(
+        taskManager, 
+        agentRegistry, 
+        backendServer,
+        memoryModule,
+        rolePlayEngine,
+        feedbackCollector
+    );
     const participant = vscode.chat.createChatParticipant('taskagent.taskagent', workforce.handleRequest.bind(workforce));
     participant.iconPath = new vscode.ThemeIcon('robot');
     context.subscriptions.push(participant);
