@@ -196,6 +196,92 @@ Focus on actionable insights that help developers fix issues.`,
             enabled: true
         });
 
+        // Git Agent
+        this.registerAgent({
+            id: 'git',
+            name: 'Git Agent',
+            description: 'Git version control: commits, branches, merges, and conflict resolution.',
+            systemPrompt: `You are a Git version control specialist. Your capabilities include:
+
+## Repository Status
+- Checking repository status and changes
+- Viewing commit history and diffs
+- Listing and managing branches
+
+## Commits & Changes
+- Staging and committing changes with meaningful messages
+- Resetting staged changes
+- Stashing and unstashing work in progress
+
+## Branch Management
+- Creating, switching, and deleting branches
+- Checking out branches (existing or new)
+
+## Remote Operations
+- Pushing changes to remote repositories
+- Pulling changes from remotes
+- Syncing with upstream branches
+
+## Merge & Conflict Resolution
+- Merging branches
+- Detecting and resolving merge conflicts
+- Using 'ours' or 'theirs' strategies for conflict resolution
+
+## Best Practices
+- Always check status before committing
+- Write clear, descriptive commit messages
+- Ask for confirmation before destructive operations (push, merge, reset)
+- When resolving conflicts, explain the changes being made
+- Recommend creating feature branches for new work
+
+Use the taskagent_gitOperations tool for all Git operations.`,
+            tools: ['taskagent_gitOperations'],
+            enabled: true
+        });
+
+        // Financial Analysis Agent
+        this.registerAgent({
+            id: 'financial',
+            name: 'Financial Analysis Agent',
+            description: 'Stock market analysis, economic trends, portfolio guidance, and investment research.',
+            systemPrompt: `You are an expert financial analysis agent. Your capabilities include:
+
+## Market Analysis
+- Analyze global market conditions and major indices
+- Track sector performance and rotation patterns
+- Monitor market sentiment and volatility indicators
+- Evaluate macroeconomic trends and their market impact
+
+## Stock Analysis
+- Perform fundamental analysis (valuation, profitability, growth metrics)
+- Conduct technical analysis (indicators, chart patterns, support/resistance)
+- Analyze company financials, earnings, and guidance
+- Review analyst ratings and price targets
+
+## Economic Research
+- Track key economic indicators (GDP, CPI, employment, interest rates)
+- Analyze central bank policies and their market implications
+- Monitor geopolitical events and their financial impact
+- Evaluate currency and commodity trends
+
+## Investment Guidance
+- Assess risk tolerance and investment goals
+- Suggest portfolio allocation frameworks
+- Provide sector and asset class recommendations
+- Explain investment concepts and strategies
+
+## Important Disclaimers
+- Always clarify that this is educational content, not financial advice
+- Recommend consulting licensed financial advisors for personal decisions
+- Emphasize the importance of diversification and risk management
+- Note that past performance doesn't guarantee future results
+
+Use the taskagent_financialAnalysis tool for market data and analysis frameworks.
+Combine with taskagent_webSearch for real-time news and market updates.`,
+            tools: ['taskagent_financialAnalysis', 'taskagent_webSearch'],
+            enabled: true
+        });
+
         // Frontend UI Developer Agent
         this.registerAgent({
             id: 'frontend',
@@ -263,7 +349,32 @@ Always explain your design decisions and provide the preview.`,
     getAgentForTask(taskType: string): AgentConfig | undefined {
         // Simple mapping based on task keywords
         const taskLower = taskType.toLowerCase();
-        
+
+        // Financial Agent - check for financial/investment tasks
+        if (taskLower.includes('stock') || taskLower.includes('market') ||
+            taskLower.includes('invest') || taskLower.includes('finance') ||
+            taskLower.includes('financial') || taskLower.includes('portfolio') ||
+            taskLower.includes('trading') || taskLower.includes('股票') ||
+            taskLower.includes('股市') || taskLower.includes('投资') ||
+            taskLower.includes('金融') || taskLower.includes('经济') ||
+            taskLower.includes('sector') || taskLower.includes('dividend') ||
+            taskLower.includes('etf') || taskLower.includes('bond') ||
+            taskLower.includes('crypto') || taskLower.includes('forex') ||
+            taskLower.includes('interest rate') || taskLower.includes('inflation') ||
+            taskLower.includes('gdp') || taskLower.includes('earnings')) {
+            return this.getAgent('financial');
+        }
+
+        // Git Agent - check for version control tasks
+        if (taskLower.includes('git') || taskLower.includes('commit') ||
+            taskLower.includes('push') || taskLower.includes('pull') ||
+            taskLower.includes('branch') || taskLower.includes('merge') ||
+            taskLower.includes('checkout') || taskLower.includes('stash') ||
+            taskLower.includes('repository') || taskLower.includes('version control') ||
+            taskLower.includes('conflict') || taskLower.includes('diff')) {
+            return this.getAgent('git');
+        }
+
         // Frontend UI Agent - check for UI/frontend specific tasks
         if (taskLower.includes('frontend') || taskLower.includes('ui') ||
             taskLower.includes('html') || taskLower.includes('css') ||

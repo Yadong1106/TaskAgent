@@ -15,6 +15,8 @@ import { StackOverflowSearchTool } from './stackOverflowSearch';
 import { TestGeneratorTool } from './testGenerator';
 import { CodeReviewTool } from './codeReview';
 import { PreviewUITool } from './previewUI';
+import { GitOperationsTool } from './gitOperations';
+import { FinancialAnalysisTool } from './financialAnalysis';
 
 // Global NoteTakingTool instance for inter-agent communication
 let noteTakingTool: NoteTakingTool;
@@ -130,7 +132,21 @@ export function registerAllTools(
         vscode.lm.registerTool('taskagent_previewUI', new PreviewUITool())
     );
 
-    console.log('TaskAgent: All tools registered (including Preview UI)');
+    // ===== Git Tools =====
+
+    // Git Operations - Version control operations
+    context.subscriptions.push(
+        vscode.lm.registerTool('taskagent_gitOperations', new GitOperationsTool())
+    );
+
+    // ===== Financial Analysis Tools =====
+
+    // Financial Analysis - Stock market and economic analysis
+    context.subscriptions.push(
+        vscode.lm.registerTool('taskagent_financialAnalysis', new FinancialAnalysisTool())
+    );
+
+    console.log('TaskAgent: All tools registered (including Git Operations and Financial Analysis)');
 }
 
 

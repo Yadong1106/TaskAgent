@@ -48,6 +48,22 @@
           {
             "name": "ui",
             "description": "Create and preview frontend UI components with live preview"
+          },
+          {
+            "name": "template",
+            "description": "Manage and execute workflow templates (list, load, info, stats)"
+          },
+          {
+            "name": "consensus",
+            "description": "Multi-agent voting (topic | agent1, agent2) - agents analyze and reach consensus"
+          },
+          {
+            "name": "reflect",
+            "description": "Self-reflection task (task | iterations=3, minScore=7) - iterative improvement"
+          },
+          {
+            "name": "analytics",
+            "description": "Agent performance dashboard (recent, detail, clear)"
           }
         ]
       }
@@ -658,6 +674,154 @@
           },
           "required": []
         }
+      },
+      {
+        "name": "taskagent_gitOperations",
+        "displayName": "Git Operations",
+        "modelDescription": "Execute Git version control operations. Use this for commits, branches, merges, pushes, pulls, diffs, logs, and conflict resolution. Always check status before making changes.",
+        "toolReferenceName": "git",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(git-branch)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "enum": [
+                "status",
+                "add",
+                "commit",
+                "push",
+                "pull",
+                "branch",
+                "merge",
+                "diff",
+                "log",
+                "checkout",
+                "stash",
+                "reset",
+                "resolveConflict"
+              ],
+              "description": "The Git operation to perform"
+            },
+            "message": {
+              "type": "string",
+              "description": "Commit message (for commit) or stash message (for stash save)"
+            },
+            "branch": {
+              "type": "string",
+              "description": "Branch name for branch/checkout/merge operations"
+            },
+            "remote": {
+              "type": "string",
+              "description": "Remote name for push/pull (default: origin)"
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Specific files for add/commit/diff/reset/resolveConflict"
+            },
+            "numCommits": {
+              "type": "number",
+              "description": "Number of commits to show in log (default: 10)"
+            },
+            "createNew": {
+              "type": "boolean",
+              "description": "Create new branch when using branch/checkout"
+            },
+            "stashAction": {
+              "type": "string",
+              "enum": [
+                "save",
+                "pop",
+                "list",
+                "drop"
+              ],
+              "description": "Stash action: save, pop, list, or drop"
+            },
+            "conflictStrategy": {
+              "type": "string",
+              "enum": [
+                "ours",
+                "theirs"
+              ],
+              "description": "Strategy for resolving conflicts: use 'ours' (current) or 'theirs' (incoming)"
+            }
+          },
+          "required": [
+            "operation"
+          ]
+        }
+      },
+      {
+        "name": "taskagent_financialAnalysis",
+        "displayName": "Financial Analysis",
+        "modelDescription": "Analyze stock markets, economic trends, and provide investment research. Supports market overview, stock analysis, sector analysis, technical indicators, fundamental analysis, risk assessment, portfolio suggestions, news impact, and economic calendar. Use this for financial research and market analysis.",
+        "toolReferenceName": "financial",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(graph)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "enum": [
+                "marketOverview",
+                "stockAnalysis",
+                "sectorAnalysis",
+                "globalTrends",
+                "technicalIndicators",
+                "fundamentalAnalysis",
+                "riskAssessment",
+                "portfolioSuggestion",
+                "newsImpact",
+                "economicCalendar"
+              ],
+              "description": "The type of financial analysis to perform"
+            },
+            "symbol": {
+              "type": "string",
+              "description": "Stock symbol (e.g., AAPL, MSFT, TSLA) for stock-specific analysis"
+            },
+            "sector": {
+              "type": "string",
+              "description": "Sector name (e.g., Technology, Healthcare, Financials, Energy)"
+            },
+            "region": {
+              "type": "string",
+              "description": "Region for analysis (e.g., US, Europe, China, Asia, Global)"
+            },
+            "timeframe": {
+              "type": "string",
+              "description": "Analysis timeframe (e.g., 1D, 1W, 1M, 3M, 1Y)"
+            },
+            "indicators": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Technical indicators to analyze (e.g., RSI, MACD, SMA, EMA, BB)"
+            },
+            "riskTolerance": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "description": "Risk tolerance level for portfolio suggestions"
+            },
+            "investmentGoal": {
+              "type": "string",
+              "description": "Investment goal description (e.g., 'long-term growth', 'income generation')"
+            }
+          },
+          "required": [
+            "operation"
+          ]
+        }
       }
     ],
     "commands": [
@@ -672,6 +836,10 @@
       {
         "command": "taskagent.openDashboard",
         "title": "TaskAgent: Open Workflow Dashboard"
+      },
+      {
+        "command": "taskagent.openVisualization",
+        "title": "TaskAgent: Open Task Visualization"
       }
     ],
     "configuration": {

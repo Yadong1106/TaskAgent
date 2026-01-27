@@ -8,18 +8,34 @@ import { MemoryModule } from './core/memory';
 import { DataGenerator } from './core/dataGenerator';
 import { FeedbackCollector } from './core/feedback';
 import { RolePlayEngine } from './core/rolePlay';
+import { TemplateManager } from './core/templateManager';
+import { VisualizationPanel } from './webview/visualizationPanel';
+import { ConsensusEngine } from './core/consensus';
+import { SelfReflectionEngine } from './core/selfReflection';
+import { ConversationCompressor } from './core/conversationCompressor';
+import { AgentAnalytics } from './core/agentAnalytics';
 
 let backendServer: BackendServer | undefined;
 let memoryModule: MemoryModule | undefined;
 let dataGenerator: DataGenerator | undefined;
 let feedbackCollector: FeedbackCollector | undefined;
 let rolePlayEngine: RolePlayEngine | undefined;
+let templateManager: TemplateManager | undefined;
+let consensusEngine: ConsensusEngine | undefined;
+let selfReflectionEngine: SelfReflectionEngine | undefined;
+let conversationCompressor: ConversationCompressor | undefined;
+let agentAnalytics: AgentAnalytics | undefined;
 
 // Export for use in other modules
 export function getMemoryModule(): MemoryModule | undefined { return memoryModule; }
 export function getDataGenerator(): DataGenerator | undefined { return dataGenerator; }
 export function getFeedbackCollector(): FeedbackCollector | undefined { return feedbackCollector; }
 export function getRolePlayEngine(): RolePlayEngine | undefined { return rolePlayEngine; }
+export function getTemplateManager(): TemplateManager | undefined { return templateManager; }
+export function getConsensusEngine(): ConsensusEngine | undefined { return consensusEngine; }
+export function getSelfReflectionEngine(): SelfReflectionEngine | undefined { return selfReflectionEngine; }
+export function getConversationCompressor(): ConversationCompressor | undefined { return conversationCompressor; }
+export function getAgentAnalytics(): AgentAnalytics | undefined { return agentAnalytics; }
 
 export async function activate(context: vscode.ExtensionContext) {
     console.log('TaskAgent is now active!');
@@ -33,18 +49,30 @@ export async function activate(context: vscode.ExtensionContext) {
     dataGenerator = new DataGenerator(context, memoryModule);
     feedbackCollector = new FeedbackCollector(memoryModule, dataGenerator);
     rolePlayEngine = new RolePlayEngine(memoryModule);
+    templateManager = new TemplateManager(context);
+
+    // Initialize advanced collaboration modules
+    consensusEngine = new ConsensusEngine(agentRegistry);
+    selfReflectionEngine = new SelfReflectionEngine(agentRegistry);
+    conversationCompressor = new ConversationCompressor();
+    agentAnalytics = new AgentAnalytics(agentRegistry, memoryModule);
     
     // Initialize backend server for browser automation and cross-app tasks
     backendServer = new BackendServer(taskManager, agentRegistry);
     
     // Register Chat Participant (pass new modules)
     const workforce = new WorkforceParticipant(
-        taskManager, 
-        agentRegistry, 
+        taskManager,
+        agentRegistry,
         backendServer,
         memoryModule,
         rolePlayEngine,
-        feedbackCollector
+        feedbackCollector,
+        templateManager,
+        consensusEngine,
+        selfReflectionEngine,
+        conversationCompressor,
+        agentAnalytics
     );
     const participant = vscode.chat.createChatParticipant('taskagent.taskagent', workforce.handleRequest.bind(workforce));
     participant.iconPath = new vscode.ThemeIcon('robot');
@@ -74,6 +102,11 @@ export async function activate(context: vscode.ExtensionContext) {
                 { enableScripts: true }
             );
             panel.webview.html = getDashboardHtml();
+        }),
+
+        vscode.commands.registerCommand('taskagent.openVisualization', () => {
+            // Open task execution visualization panel
+            VisualizationPanel.createOrShow(context.extensionUri, taskManager, agentRegistry);
         })
     );
 
