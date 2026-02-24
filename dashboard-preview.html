@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TaskAgent Dashboard - Preview</title>
+    <style>
+        :root {
+            --bg: #1e1e1e;
+            --bg-card: #252526;
+            --bg-hover: #2a2d2e;
+            --text: #cccccc;
+            --text-muted: #888888;
+            --accent: #0078d4;
+            --accent-light: #1a8cff;
+            --success: #4ec9b0;
+            --warning: #dcdcaa;
+            --error: #f44747;
+            --border: #3c3c3c;
+            --radius: 8px;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            padding: 20px;
+            line-height: 1.5;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+        .header h1 { font-size: 22px; font-weight: 600; color: var(--accent-light); }
+        .header .subtitle { color: var(--text-muted); font-size: 13px; }
+        .btn {
+            padding: 6px 14px; border: 1px solid var(--border); border-radius: 4px;
+            background: var(--bg-card); color: var(--text); cursor: pointer; font-size: 12px;
+        }
+        .btn:hover { background: var(--accent); color: white; border-color: var(--accent); }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+        .stat-card {
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 16px; text-align: center;
+        }
+        .stat-card .number { font-size: 28px; font-weight: 700; color: var(--accent-light); }
+        .stat-card .label {
+            font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+            color: var(--text-muted); margin-top: 4px;
+        }
+        .stat-card.success .number { color: var(--success); }
+        .stat-card.warning .number { color: var(--warning); }
+        .stat-card.error .number { color: var(--error); }
+        .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+        .tab {
+            padding: 10px 20px; cursor: pointer; color: var(--text-muted);
+            font-size: 13px; border-bottom: 2px solid transparent; transition: all 0.2s;
+        }
+        .tab:hover { color: var(--text); }
+        .tab.active { color: var(--accent-light); border-bottom-color: var(--accent); }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .section {
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 16px; margin-bottom: 16px;
+        }
+        .section h3 { font-size: 14px; margin-bottom: 12px; color: var(--accent-light); }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th { text-align: left; padding: 8px; color: var(--text-muted); border-bottom: 1px solid var(--border); font-weight: 500; }
+        td { padding: 8px; border-bottom: 1px solid var(--border); }
+        tr:hover { background: var(--bg-hover); }
+        .badge {
+            display: inline-block; padding: 2px 8px; border-radius: 10px;
+            font-size: 11px; font-weight: 500;
+        }
+        .badge.running { background: #0078d433; color: var(--accent-light); }
+        .badge.completed { background: #4ec9b033; color: var(--success); }
+        .badge.failed { background: #f4474733; color: var(--error); }
+        .badge.pending { background: #dcdcaa33; color: var(--warning); }
+        .badge.enabled { background: #4ec9b033; color: var(--success); }
+        .badge.disabled { background: #88888833; color: var(--text-muted); }
+        .toggle { position: relative; display: inline-block; width: 36px; height: 20px; }
+        .toggle input { opacity: 0; width: 0; height: 0; }
+        .toggle .slider {
+            position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+            background: var(--border); border-radius: 10px; transition: 0.3s;
+        }
+        .toggle .slider:before {
+            position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px;
+            background: white; border-radius: 50%; transition: 0.3s;
+        }
+        .toggle input:checked + .slider { background: var(--accent); }
+        .toggle input:checked + .slider:before { transform: translateX(16px); }
+        .msg-log { max-height: 300px; overflow-y: auto; font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; }
+        .msg-entry { padding: 4px 8px; border-left: 3px solid var(--border); margin-bottom: 4px; }
+        .msg-entry.request { border-left-color: var(--accent); }
+        .msg-entry.response { border-left-color: var(--success); }
+        .msg-entry.delegate { border-left-color: var(--warning); }
+        .msg-entry.broadcast { border-left-color: #c586c0; }
+        .msg-entry .time { color: var(--text-muted); font-size: 11px; }
+        .msg-entry .from { color: var(--accent-light); }
+        .msg-entry .to { color: var(--success); }
+        .workflow-card {
+            background: var(--bg); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 12px; margin-bottom: 8px;
+        }
+        .workflow-card h4 { font-size: 13px; margin-bottom: 4px; }
+        .workflow-card .desc { color: var(--text-muted); font-size: 12px; }
+        .workflow-card .meta { font-size: 11px; color: var(--text-muted); margin-top: 6px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>🤖 TaskAgent Dashboard</h1>
+            <div class="subtitle">Multi-Agent AI Workflow Orchestrator &mdash; v1.0.0</div>
+        </div>
+        <button class="btn" onclick="location.reload()">↻ Refresh</button>
+    </div>
+
+    <!-- Stats Overview -->
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="number">12</div>
+            <div class="label">Total Tasks</div>
+        </div>
+        <div class="stat-card success">
+            <div class="number">9</div>
+            <div class="label">Completed</div>
+        </div>
+        <div class="stat-card">
+            <div class="number">2</div>
+            <div class="label">Running</div>
+        </div>
+        <div class="stat-card error">
+            <div class="number">1</div>
+            <div class="label">Failed</div>
+        </div>
+        <div class="stat-card">
+            <div class="number">7/8</div>
+            <div class="label">Active Agents</div>
+        </div>
+        <div class="stat-card success">
+            <div class="number">5</div>
+            <div class="label">Active Skills</div>
+        </div>
+        <div class="stat-card">
+            <div class="number">47</div>
+            <div class="label">Messages</div>
+        </div>
+        <div class="stat-card warning">
+            <div class="number">1</div>
+            <div class="label">Running Workflows</div>
+        </div>
+        <div class="stat-card" style="border-color:#c586c0">
+            <div class="number" style="color:#c586c0">284.6K</div>
+            <div class="label">Total Tokens</div>
+        </div>
+        <div class="stat-card" style="border-color:#ce9178">
+            <div class="number" style="color:#ce9178">$2.18</div>
+            <div class="label">Est. Cost</div>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+        <div class="tab" onclick="switchTab('tasks')">📋 Tasks</div>
+        <div class="tab" onclick="switchTab('agents')">🤖 Agents</div>
+        <div class="tab" onclick="switchTab('skills')">🧩 Skills</div>
+        <div class="tab" onclick="switchTab('workflows')">📋 Workflows</div>
+        <div class="tab" onclick="switchTab('messages')">💬 Messages</div>
+        <div class="tab active" onclick="switchTab('usage')">📊 Token Usage</div>
+        <div class="tab" onclick="switchTab('memory')">🧠 Memory</div>
+    </div>
+
+    <!-- Tasks Tab -->
+    <div id="tab-tasks" class="tab-content">
+        <div class="section">
+            <h3>Tasks</h3>
+            <table>
+                <tr><th>Name</th><th>Status</th><th>Progress</th><th>Subtasks</th></tr>
+                <tr><td>Security review for auth module</td><td><span class="badge completed">completed</span></td><td>100%</td><td>4</td></tr>
+                <tr><td>Implement PR creation tool</td><td><span class="badge completed">completed</span></td><td>100%</td><td>3</td></tr>
+                <tr><td>Add Playwright test framework</td><td><span class="badge running">running</span></td><td>65%</td><td>5</td></tr>
+                <tr><td>Research OpenClaw architecture</td><td><span class="badge completed">completed</span></td><td>100%</td><td>2</td></tr>
+                <tr><td>Bug triage: login timeout</td><td><span class="badge running">running</span></td><td>40%</td><td>3</td></tr>
+                <tr><td>Generate API documentation</td><td><span class="badge failed">failed</span></td><td>20%</td><td>2</td></tr>
+            </table>
+        </div>
+    </div>
+
+    <!-- Agents Tab -->
+    <div id="tab-agents" class="tab-content">
+        <div class="section">
+            <h3>Registered Agents</h3>
+            <table>
+                <tr><th>Agent</th><th>Status</th><th>Tools</th><th>Description</th></tr>
+                <tr><td><strong>Developer Agent</strong> <small style="color:var(--text-muted)">developer</small></td><td><span class="badge enabled">Active</span></td><td>6</td><td>Write, execute, and debug code across languages</td></tr>
+                <tr><td><strong>Search Agent</strong> <small style="color:var(--text-muted)">search</small></td><td><span class="badge enabled">Active</span></td><td>4</td><td>Search web, GitHub, Stack Overflow for information</td></tr>
+                <tr><td><strong>Document Agent</strong> <small style="color:var(--text-muted)">document</small></td><td><span class="badge enabled">Active</span></td><td>3</td><td>Create documents, reports, and notes</td></tr>
+                <tr><td><strong>Browser Agent</strong> <small style="color:var(--text-muted)">browser</small></td><td><span class="badge enabled">Active</span></td><td>2</td><td>Browse web pages, extract content</td></tr>
+                <tr><td><strong>Security Agent</strong> <small style="color:var(--text-muted)">security</small></td><td><span class="badge enabled">Active</span></td><td>3</td><td>Security analysis, vulnerability scanning</td></tr>
+                <tr><td><strong>Code Review Agent</strong> <small style="color:var(--text-muted)">codereview</small></td><td><span class="badge enabled">Active</span></td><td>3</td><td>Automated code review for quality</td></tr>
+                <tr><td><strong>Frontend Agent</strong> <small style="color:var(--text-muted)">frontend</small></td><td><span class="badge enabled">Active</span></td><td>2</td><td>Create and preview UI components</td></tr>
+                <tr><td><strong>Multimodal Agent</strong> <small style="color:var(--text-muted)">multimodal</small></td><td><span class="badge disabled">Inactive</span></td><td>4</td><td>Process images, audio, and multi-modal content</td></tr>
+            </table>
+        </div>
+    </div>
+
+    <!-- Skills Tab -->
+    <div id="tab-skills" class="tab-content">
+        <div class="section">
+            <h3>Skills Registry</h3>
+            <table>
+                <tr><th>Skill</th><th>Version</th><th>Tags</th><th>Enabled</th></tr>
+                <tr>
+                    <td><strong>Security Review</strong><br><small style="color:var(--text-muted)">Deep security analysis of code, APIs, and data flows</small></td>
+                    <td>v1.0.0</td>
+                    <td><span class="badge pending">security</span> <span class="badge pending">compliance</span></td>
+                    <td><label class="toggle"><input type="checkbox" checked><span class="slider"></span></label></td>
+                </tr>
+                <tr>
+                    <td><strong>Code Quality</strong><br><small style="color:var(--text-muted)">Code review, testing, and quality assurance</small></td>
+                    <td>v1.0.0</td>
+                    <td><span class="badge pending">quality</span> <span class="badge pending">testing</span></td>
+                    <td><label class="toggle"><input type="checkbox" checked><span class="slider"></span></label></td>
+                </tr>
+                <tr>
+                    <td><strong>Web Research</strong><br><small style="color:var(--text-muted)">Research topics across the web and generate reports</small></td>
+                    <td>v1.0.0</td>
+                    <td><span class="badge pending">research</span> <span class="badge pending">web</span></td>
+                    <td><label class="toggle"><input type="checkbox" checked><span class="slider"></span></label></td>
+                </tr>
+                <tr>
+                    <td><strong>PR Review Pipeline</strong><br><small style="color:var(--text-muted)">Automated pull request review from multiple perspectives</small></td>
+                    <td>v1.0.0</td>
+                    <td><span class="badge pending">pr</span> <span class="badge pending">review</span></td>
+                    <td><label class="toggle"><input type="checkbox" checked><span class="slider"></span></label></td>
+                </tr>
+                <tr>
+                    <td><strong>Bug Hunter</strong><br><small style="color:var(--text-muted)">Systematic bug detection and analysis</small></td>
+                    <td>v1.0.0</td>
+                    <td><span class="badge pending">debugging</span> <span class="badge pending">bugs</span></td>
+                    <td><label class="toggle"><input type="checkbox" checked><span class="slider"></span></label></td>
+                </tr>
+                <tr>
+                    <td><strong>Documentation Generator</strong><br><small style="color:var(--text-muted)">Auto-generate documentation from code</small></td>
+                    <td>v1.0.0</td>
+                    <td><span class="badge pending">documentation</span> <span class="badge pending">api-docs</span></td>
+                    <td><label class="toggle"><input type="checkbox"><span class="slider"></span></label></td>
+                </tr>
+            </table>
+        </div>
+    </div>
+
+    <!-- Workflows Tab -->
+    <div id="tab-workflows" class="tab-content">
+        <div class="section">
+            <h3>Available Workflows</h3>
+            <div class="workflow-card">
+                <h4>📋 PR Review Pipeline <small style="color:var(--text-muted)">v1.0.0</small></h4>
+                <div class="desc">Multi-perspective pull request review workflow</div>
+                <div class="meta">Steps: 4 | Inputs: files*, focus | Tags: review, pr, pipeline</div>
+            </div>
+            <div class="workflow-card">
+                <h4>📋 Bug Triage Pipeline <small style="color:var(--text-muted)">v1.0.0</small></h4>
+                <div class="desc">Systematic bug analysis, classification, and fix suggestion</div>
+                <div class="meta">Steps: 4 | Inputs: description*, files | Tags: bug, triage, debug</div>
+            </div>
+            <div class="workflow-card">
+                <h4>📋 Research Report Generator <small style="color:var(--text-muted)">v1.0.0</small></h4>
+                <div class="desc">Research a topic and generate a structured report</div>
+                <div class="meta">Steps: 3 | Inputs: topic*, depth | Tags: research, report</div>
+            </div>
+        </div>
+        <div class="section">
+            <h3>Execution History</h3>
+            <table>
+                <tr><th>Workflow</th><th>Status</th><th>Duration</th><th>Steps</th></tr>
+                <tr><td>PR Review Pipeline</td><td><span class="badge completed">completed</span></td><td>45.2s</td><td>4</td></tr>
+                <tr><td>Bug Triage Pipeline</td><td><span class="badge running">running</span></td><td>running...</td><td>2</td></tr>
+                <tr><td>Research Report Generator</td><td><span class="badge completed">completed</span></td><td>32.8s</td><td>3</td></tr>
+            </table>
+        </div>
+    </div>
+
+    <!-- Messages Tab -->
+    <div id="tab-messages" class="tab-content">
+        <div class="section">
+            <h3>Agent Communication Log</h3>
+            <div style="margin-bottom:8px;color:var(--text-muted);font-size:12px">
+                Total: 47 | Pending: 2 | Delegations: 1/5 | Subscriptions: 3
+            </div>
+            <div class="msg-log">
+                <div class="msg-entry delegate"><span class="time">14:32:15</span> <span class="from">developer</span> → <span class="to">security</span> [delegate] Delegation: Review auth module for vulnerabilities</div>
+                <div class="msg-entry response"><span class="time">14:32:10</span> <span class="from">security</span> → <span class="to">developer</span> [response] RE: Security scan results</div>
+                <div class="msg-entry request"><span class="time">14:31:58</span> <span class="from">developer</span> → <span class="to">search</span> [request] Find related code patterns</div>
+                <div class="msg-entry broadcast"><span class="time">14:31:45</span> <span class="from">orchestrator</span> → <span class="to">*</span> [broadcast] Task decomposition complete: 4 subtasks</div>
+                <div class="msg-entry response"><span class="time">14:31:30</span> <span class="from">search</span> → <span class="to">developer</span> [response] RE: Found 3 matching patterns</div>
+                <div class="msg-entry request"><span class="time">14:31:12</span> <span class="from">codereview</span> → <span class="to">developer</span> [request] Need context for PR #142</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Token Usage Tab (DEFAULT VISIBLE) -->
+    <div id="tab-usage" class="tab-content active">
+        <!-- Usage Overview -->
+        <div class="section">
+            <h3>📊 Session Usage Overview</h3>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="number">38</div>
+                    <div class="label">Total LLM Calls</div>
+                </div>
+                <div class="stat-card" style="border-color:#c586c0">
+                    <div class="number" style="color:#c586c0">284.6K</div>
+                    <div class="label">Total Tokens</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number" style="color:#569cd6">98.2K</div>
+                    <div class="label">Input Tokens</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number" style="color:#4ec9b0">186.4K</div>
+                    <div class="label">Output Tokens</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number" style="color:#ce9178">$2.18</div>
+                    <div class="label">Est. Total Cost</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number">97%</div>
+                    <div class="label">Success Rate</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number">2.3s</div>
+                    <div class="label">Avg Latency</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number">3</div>
+                    <div class="label">Models Used</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Per-Model Breakdown -->
+        <div class="section">
+            <h3>🤖 Per-Model Token Usage</h3>
+            <table>
+                <tr>
+                    <th>Model</th>
+                    <th>Calls</th>
+                    <th>Input Tokens</th>
+                    <th>Output Tokens</th>
+                    <th>Total Tokens</th>
+                    <th>Avg Latency</th>
+                    <th>Est. Cost</th>
+                    <th>Usage Bar</th>
+                </tr>
+                <tr>
+                    <td><strong>gpt-4o</strong><br><small style="color:var(--text-muted)">gpt-4o</small></td>
+                    <td>22 <small style="color:var(--text-muted)">(1 fail)</small></td>
+                    <td>72.5K</td>
+                    <td>143.8K</td>
+                    <td><strong>216.3K</strong></td>
+                    <td>2.8s</td>
+                    <td style="color:#ce9178">$1.62</td>
+                    <td style="width:150px">
+                        <div style="background:var(--border);border-radius:4px;height:16px;overflow:hidden">
+                            <div style="background:linear-gradient(90deg,#0078d4,#c586c0);height:100%;width:100%;border-radius:4px"></div>
+                        </div>
+                    </td>
+                </tr>
+                <tr>
+                    <td><strong>gpt-4o-mini</strong><br><small style="color:var(--text-muted)">gpt-4o-mini</small></td>
+                    <td>12 <small style="color:var(--text-muted)">(0 fail)</small></td>
+                    <td>18.4K</td>
+                    <td>35.2K</td>
+                    <td><strong>53.6K</strong></td>
+                    <td>1.2s</td>
+                    <td style="color:#ce9178">$0.02</td>
+                    <td style="width:150px">
+                        <div style="background:var(--border);border-radius:4px;height:16px;overflow:hidden">
+                            <div style="background:linear-gradient(90deg,#0078d4,#c586c0);height:100%;width:25%;border-radius:4px"></div>
+                        </div>
+                    </td>
+                </tr>
+                <tr>
+                    <td><strong>claude-3.5-sonnet</strong><br><small style="color:var(--text-muted)">claude-3.5-sonnet</small></td>
+                    <td>4 <small style="color:var(--text-muted)">(0 fail)</small></td>
+                    <td>7.3K</td>
+                    <td>7.4K</td>
+                    <td><strong>14.7K</strong></td>
+                    <td>3.1s</td>
+                    <td style="color:#ce9178">$0.13</td>
+                    <td style="width:150px">
+                        <div style="background:var(--border);border-radius:4px;height:16px;overflow:hidden">
+                            <div style="background:linear-gradient(90deg,#0078d4,#c586c0);height:100%;width:7%;border-radius:4px"></div>
+                        </div>
+                    </td>
+                </tr>
+            </table>
+        </div>
+
+        <!-- Per-Caller Breakdown -->
+        <div class="section">
+            <h3>📍 Per-Component Usage</h3>
+            <table>
+                <tr><th>Component</th><th>Calls</th><th>Total Tokens</th><th>Duration</th><th>Model Breakdown</th></tr>
+                <tr>
+                    <td><strong>orchestrator:agent:developer</strong></td>
+                    <td>12</td><td>125.3K</td><td>38.2s</td>
+                    <td style="font-size:11px"><span class="badge pending">gpt-4o: 98.1K (9)</span> <span class="badge pending">gpt-4o-mini: 27.2K (3)</span></td>
+                </tr>
+                <tr>
+                    <td><strong>orchestrator:decompose</strong></td>
+                    <td>8</td><td>42.8K</td><td>18.5s</td>
+                    <td style="font-size:11px"><span class="badge pending">gpt-4o: 42.8K (8)</span></td>
+                </tr>
+                <tr>
+                    <td><strong>orchestrator:agent:security</strong></td>
+                    <td>6</td><td>38.5K</td><td>15.2s</td>
+                    <td style="font-size:11px"><span class="badge pending">gpt-4o: 34.2K (4)</span> <span class="badge pending">claude-3.5-sonnet: 4.3K (2)</span></td>
+                </tr>
+                <tr>
+                    <td><strong>orchestrator:agent:search</strong></td>
+                    <td>5</td><td>32.1K</td><td>8.4s</td>
+                    <td style="font-size:11px"><span class="badge pending">gpt-4o-mini: 26.4K (4)</span> <span class="badge pending">gpt-4o: 5.7K (1)</span></td>
+                </tr>
+                <tr>
+                    <td><strong>workforce:review</strong></td>
+                    <td>4</td><td>28.6K</td><td>12.1s</td>
+                    <td style="font-size:11px"><span class="badge pending">gpt-4o: 18.2K (2)</span> <span class="badge pending">claude-3.5-sonnet: 10.4K (2)</span></td>
+                </tr>
+                <tr>
+                    <td><strong>workforce:ui</strong></td>
+                    <td>3</td><td>17.3K</td><td>6.8s</td>
+                    <td style="font-size:11px"><span class="badge pending">gpt-4o: 17.3K (3)</span></td>
+                </tr>
+            </table>
+        </div>
+
+        <!-- Hourly Usage Chart -->
+        <div class="section">
+            <h3>📈 Hourly Usage (last 24h)</h3>
+            <div style="font-family:'Consolas','Courier New',monospace;font-size:12px;overflow-x:auto">
+                <div style="white-space:nowrap;margin:1px 0"><span style="color:var(--text-muted);display:inline-block;width:100px">2/24 9:00</span><span style="color:#c586c0">████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░</span><span style="color:var(--text-muted)"> 8.2K (2 calls)</span></div>
+                <div style="white-space:nowrap;margin:1px 0"><span style="color:var(--text-muted);display:inline-block;width:100px">2/24 10:00</span><span style="color:#c586c0">███████████████░░░░░░░░░░░░░░░░░░░░░░░░░░</span><span style="color:var(--text-muted)"> 32.5K (5 calls)</span></div>
+                <div style="white-space:nowrap;margin:1px 0"><span style="color:var(--text-muted);display:inline-block;width:100px">2/24 11:00</span><span style="color:#c586c0">████████████████████████████████████████░░</span><span style="color:var(--text-muted)"> 82.1K (12 calls)</span></div>
+                <div style="white-space:nowrap;margin:1px 0"><span style="color:var(--text-muted);display:inline-block;width:100px">2/24 12:00</span><span style="color:#c586c0">██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░</span><span style="color:var(--text-muted)"> 21.4K (4 calls)</span></div>
+                <div style="white-space:nowrap;margin:1px 0"><span style="color:var(--text-muted);display:inline-block;width:100px">2/24 13:00</span><span style="color:#c586c0">██████████████████████████████████████████</span><span style="color:var(--text-muted)"> 86.3K (9 calls)</span></div>
+                <div style="white-space:nowrap;margin:1px 0"><span style="color:var(--text-muted);display:inline-block;width:100px">2/24 14:00</span><span style="color:#c586c0">█████████████████████████░░░░░░░░░░░░░░░░░</span><span style="color:var(--text-muted)"> 54.1K (6 calls)</span></div>
+            </div>
+        </div>
+
+        <!-- Recent Call Log -->
+        <div class="section">
+            <h3>📝 Recent LLM Calls</h3>
+            <div class="msg-log">
+                <div class="msg-entry response">
+                    <span class="time">14:32:18</span> ✅ <span class="from">orchestrator:agent:developer</span> → <strong>gpt-4o</strong> | 2.1K in / 4.8K out | 3.2s
+                    <br><small style="color:var(--text-muted);margin-left:60px">Subtask: Implement PR creation with ADO REST API</small>
+                </div>
+                <div class="msg-entry response">
+                    <span class="time">14:31:55</span> ✅ <span class="from">orchestrator:agent:security</span> → <strong>gpt-4o</strong> | 1.8K in / 3.2K out | 2.5s
+                    <br><small style="color:var(--text-muted);margin-left:60px">Subtask: Security review of auth module</small>
+                </div>
+                <div class="msg-entry response">
+                    <span class="time">14:31:42</span> ✅ <span class="from">orchestrator:decompose</span> → <strong>gpt-4o</strong> | 1.2K in / 0.8K out | 1.8s
+                    <br><small style="color:var(--text-muted);margin-left:60px">Task decomposition</small>
+                </div>
+                <div class="msg-entry response">
+                    <span class="time">14:30:58</span> ✅ <span class="from">workforce:review</span> → <strong>claude-3.5-sonnet</strong> | 3.5K in / 5.2K out | 4.1s
+                    <br><small style="color:var(--text-muted);margin-left:60px">Consolidated review summary</small>
+                </div>
+                <div class="msg-entry request">
+                    <span class="time">14:30:22</span> ❌ <span class="from">orchestrator:agent:developer</span> → <strong>gpt-4o</strong> | 2.4K in / 0 out | 8.0s
+                    <br><small style="color:var(--text-muted);margin-left:60px">Subtask: Generate API documentation (timeout)</small>
+                </div>
+                <div class="msg-entry response">
+                    <span class="time">14:29:45</span> ✅ <span class="from">orchestrator:agent:search</span> → <strong>gpt-4o-mini</strong> | 0.6K in / 2.1K out | 0.9s
+                    <br><small style="color:var(--text-muted);margin-left:60px">Subtask: Search for related code patterns</small>
+                </div>
+                <div class="msg-entry response">
+                    <span class="time">14:29:12</span> ✅ <span class="from">workforce:ui</span> → <strong>gpt-4o</strong> | 1.8K in / 6.4K out | 3.8s
+                    <br><small style="color:var(--text-muted);margin-left:60px">UI component generation</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Memory Tab -->
+    <div id="tab-memory" class="tab-content">
+        <div class="section">
+            <h3>Memory Statistics</h3>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="number">24</div>
+                    <div class="label">Short-term</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number">156</div>
+                    <div class="label">Long-term</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number">8</div>
+                    <div class="label">Conversations</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.getElementById('tab-' + tabName).classList.add('active');
+            event.target.classList.add('active');
+        }
+    </script>
+</body>
+</html>

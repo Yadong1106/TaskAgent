@@ -8,34 +8,34 @@ import { MemoryModule } from './core/memory';
 import { DataGenerator } from './core/dataGenerator';
 import { FeedbackCollector } from './core/feedback';
 import { RolePlayEngine } from './core/rolePlay';
-import { TemplateManager } from './core/templateManager';
-import { VisualizationPanel } from './webview/visualizationPanel';
-import { ConsensusEngine } from './core/consensus';
-import { SelfReflectionEngine } from './core/selfReflection';
-import { ConversationCompressor } from './core/conversationCompressor';
-import { AgentAnalytics } from './core/agentAnalytics';
+import { EmbeddingService } from './core/embedding';
+import { SkillRegistry } from './core/skillRegistry';
+import { AgentBus } from './core/agentBus';
+import { WorkflowEngine } from './core/workflowEngine';
+import { UsageTracker } from './core/usageTracker';
+import { DashboardPanel } from './ui/dashboard';
 
 let backendServer: BackendServer | undefined;
 let memoryModule: MemoryModule | undefined;
 let dataGenerator: DataGenerator | undefined;
 let feedbackCollector: FeedbackCollector | undefined;
 let rolePlayEngine: RolePlayEngine | undefined;
-let templateManager: TemplateManager | undefined;
-let consensusEngine: ConsensusEngine | undefined;
-let selfReflectionEngine: SelfReflectionEngine | undefined;
-let conversationCompressor: ConversationCompressor | undefined;
-let agentAnalytics: AgentAnalytics | undefined;
+let embeddingService: EmbeddingService | undefined;
+let skillRegistry: SkillRegistry | undefined;
+let agentBus: AgentBus | undefined;
+let workflowEngine: WorkflowEngine | undefined;
+let usageTracker: UsageTracker | undefined;
 
 // Export for use in other modules
 export function getMemoryModule(): MemoryModule | undefined { return memoryModule; }
 export function getDataGenerator(): DataGenerator | undefined { return dataGenerator; }
 export function getFeedbackCollector(): FeedbackCollector | undefined { return feedbackCollector; }
 export function getRolePlayEngine(): RolePlayEngine | undefined { return rolePlayEngine; }
-export function getTemplateManager(): TemplateManager | undefined { return templateManager; }
-export function getConsensusEngine(): ConsensusEngine | undefined { return consensusEngine; }
-export function getSelfReflectionEngine(): SelfReflectionEngine | undefined { return selfReflectionEngine; }
-export function getConversationCompressor(): ConversationCompressor | undefined { return conversationCompressor; }
-export function getAgentAnalytics(): AgentAnalytics | undefined { return agentAnalytics; }
+export function getEmbeddingService(): EmbeddingService | undefined { return embeddingService; }
+export function getSkillRegistry(): SkillRegistry | undefined { return skillRegistry; }
+export function getAgentBus(): AgentBus | undefined { return agentBus; }
+export function getWorkflowEngine(): WorkflowEngine | undefined { return workflowEngine; }
+export function getUsageTracker(): UsageTracker | undefined { return usageTracker; }
 
 export async function activate(context: vscode.ExtensionContext) {
     console.log('TaskAgent is now active!');
@@ -44,35 +44,55 @@ export async function activate(context: vscode.ExtensionContext) {
     const taskManager = new TaskManager();
     const agentRegistry = new AgentRegistry();
     
+    // Initialize embedding service for semantic search
+    embeddingService = new EmbeddingService({
+        useLocalFallback: true,
+        cacheEmbeddings: true,
+        localDimension: 384
+    });
+    
     // Initialize new modules (inspired by CAMEL framework)
-    memoryModule = new MemoryModule(context);
+    memoryModule = new MemoryModule(context, embeddingService);
     dataGenerator = new DataGenerator(context, memoryModule);
     feedbackCollector = new FeedbackCollector(memoryModule, dataGenerator);
     rolePlayEngine = new RolePlayEngine(memoryModule);
-    templateManager = new TemplateManager(context);
-
-    // Initialize advanced collaboration modules
-    consensusEngine = new ConsensusEngine(agentRegistry);
-    selfReflectionEngine = new SelfReflectionEngine(agentRegistry);
-    conversationCompressor = new ConversationCompressor();
-    agentAnalytics = new AgentAnalytics(agentRegistry, memoryModule);
     
+    // Initialize Skills, AgentBus, Workflow Engine, and Usage Tracker
+    skillRegistry = new SkillRegistry();
+    agentBus = new AgentBus();
+    workflowEngine = new WorkflowEngine();
+    usageTracker = new UsageTracker();
+
+    // Initialize workspace-dependent features
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (workspaceFolders && workspaceFolders.length > 0) {
+        const rootPath = workspaceFolders[0].uri.fsPath;
+        skillRegistry.initializeSkillsDir(rootPath);
+        workflowEngine.initializeWorkflowsDir(rootPath);
+    }
+
+    // Wire workflow step executor to orchestrator
+    const orchestrator = new (await import('./core/orchestrator')).Orchestrator(taskManager, agentRegistry, usageTracker);
+    workflowEngine.stepExecutor = async (step, ctx) => {
+        const prompt = step.prompt || '';
+        return { agent: step.agent, prompt, context: ctx };
+    };
+
     // Initialize backend server for browser automation and cross-app tasks
     backendServer = new BackendServer(taskManager, agentRegistry);
     
     // Register Chat Participant (pass new modules)
     const workforce = new WorkforceParticipant(
-        taskManager,
-        agentRegistry,
+        taskManager, 
+        agentRegistry, 
         backendServer,
         memoryModule,
         rolePlayEngine,
         feedbackCollector,
-        templateManager,
-        consensusEngine,
-        selfReflectionEngine,
-        conversationCompressor,
-        agentAnalytics
+        skillRegistry,
+        agentBus,
+        workflowEngine,
+        usageTracker
     );
     const participant = vscode.chat.createChatParticipant('taskagent.taskagent', workforce.handleRequest.bind(workforce));
     participant.iconPath = new vscode.ThemeIcon('robot');
@@ -93,20 +113,18 @@ export async function activate(context: vscode.ExtensionContext) {
             vscode.window.showInformationMessage('TaskAgent backend server stopped');
         }),
         
-        vscode.commands.registerCommand('TaskAgent.openDashboard', () => {
-            // Open webview dashboard
-            const panel = vscode.window.createWebviewPanel(
-                'TaskAgentDashboard',
-                'TaskAgent Dashboard',
-                vscode.ViewColumn.One,
-                { enableScripts: true }
+        vscode.commands.registerCommand('taskagent.openDashboard', () => {
+            // Open enhanced webview dashboard
+            DashboardPanel.createOrShow(
+                context.extensionUri,
+                taskManager,
+                agentRegistry,
+                skillRegistry!,
+                workflowEngine!,
+                agentBus!,
+                memoryModule!,
+                usageTracker!
             );
-            panel.webview.html = getDashboardHtml();
-        }),
-
-        vscode.commands.registerCommand('taskagent.openVisualization', () => {
-            // Open task execution visualization panel
-            VisualizationPanel.createOrShow(context.extensionUri, taskManager, agentRegistry);
         })
     );
 
@@ -124,61 +142,6 @@ export async function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {
     backendServer?.stop();
-}
-
-function getDashboardHtml(): string {
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TaskAgent Dashboard</title>
-    <style>
-        body {
-            font-family: var(--vscode-font-family);
-            padding: 20px;
-            color: var(--vscode-foreground);
-            background-color: var(--vscode-editor-background);
-        }
-        .header { font-size: 24px; margin-bottom: 20px; }
-        .section { margin-bottom: 30px; }
-        .task-list { list-style: none; padding: 0; }
-        .task-item {
-            padding: 10px;
-            margin: 5px 0;
-            background: var(--vscode-editor-inactiveSelectionBackground);
-            border-radius: 4px;
-        }
-        .status { display: inline-block; padding: 2px 8px; border-radius: 3px; }
-        .status.running { background: #4CAF50; color: white; }
-        .status.pending { background: #FF9800; color: white; }
-        .status.completed { background: #2196F3; color: white; }
-    </style>
-</head>
-<body>
-    <div class="header">🤖 TaskAgent Workflow Dashboard</div>
-    
-    <div class="section">
-        <h3>Active Tasks</h3>
-        <ul class="task-list" id="taskList">
-            <li class="task-item">
-                <span class="status running">Running</span>
-                No active tasks
-            </li>
-        </ul>
-    </div>
-    
-    <div class="section">
-        <h3>Agent Status</h3>
-        <div id="agentStatus">
-            <p>✅ Code Agent: Ready</p>
-            <p>✅ Search Agent: Ready</p>
-            <p>✅ Document Agent: Ready</p>
-            <p>✅ Browser Agent: Ready</p>
-        </div>
-    </div>
-</body>
-</html>`;
 }
 
 

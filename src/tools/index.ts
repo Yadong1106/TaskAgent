@@ -15,8 +15,8 @@ import { StackOverflowSearchTool } from './stackOverflowSearch';
 import { TestGeneratorTool } from './testGenerator';
 import { CodeReviewTool } from './codeReview';
 import { PreviewUITool } from './previewUI';
-import { GitOperationsTool } from './gitOperations';
-import { FinancialAnalysisTool } from './financialAnalysis';
+import { AdoPullRequestTool } from './adoPullRequest';
+import { PlaywrightTestTool } from './playwrightTest';
 
 // Global NoteTakingTool instance for inter-agent communication
 let noteTakingTool: NoteTakingTool;
@@ -132,21 +132,19 @@ export function registerAllTools(
         vscode.lm.registerTool('taskagent_previewUI', new PreviewUITool())
     );
 
-    // ===== Git Tools =====
+    // ===== DevOps & Testing Tools =====
 
-    // Git Operations - Version control operations
+    // ADO Pull Request - Create Azure DevOps Pull Requests with auto-generated content
     context.subscriptions.push(
-        vscode.lm.registerTool('taskagent_gitOperations', new GitOperationsTool())
+        vscode.lm.registerTool('taskagent_adoPullRequest', new AdoPullRequestTool())
     );
 
-    // ===== Financial Analysis Tools =====
-
-    // Financial Analysis - Stock market and economic analysis
+    // Playwright Test - Automated frontend testing with browser automation
     context.subscriptions.push(
-        vscode.lm.registerTool('taskagent_financialAnalysis', new FinancialAnalysisTool())
+        vscode.lm.registerTool('taskagent_playwrightTest', new PlaywrightTestTool())
     );
 
-    console.log('TaskAgent: All tools registered (including Git Operations and Financial Analysis)');
+    console.log('TaskAgent: All tools registered (including ADO PR & Playwright)');
 }
 
 

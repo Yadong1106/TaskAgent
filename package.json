@@ -2,7 +2,7 @@
   "name": "taskagent",
   "displayName": "TaskAgent - Multi-Agent Workflow",
   "description": "Eigent-style multi-agent autonomous workflow powered by GitHub Copilot",
-  "version": "0.0.19",
+  "version": "1.0.0",
   "publisher": "yadongzhai",
   "icon": "images/icon.png",
   "engines": {
@@ -50,20 +50,20 @@
             "description": "Create and preview frontend UI components with live preview"
           },
           {
-            "name": "template",
-            "description": "Manage and execute workflow templates (list, load, info, stats)"
+            "name": "skills",
+            "description": "Manage skills: list, enable, disable, create, find"
           },
           {
-            "name": "consensus",
-            "description": "Multi-agent voting (topic | agent1, agent2) - agents analyze and reach consensus"
+            "name": "workflow",
+            "description": "Run and manage workflow pipelines: list, run, status, describe"
           },
           {
-            "name": "reflect",
-            "description": "Self-reflection task (task | iterations=3, minScore=7) - iterative improvement"
+            "name": "pr",
+            "description": "Create Azure DevOps PR from current branch with auto-generated title & description"
           },
           {
-            "name": "analytics",
-            "description": "Agent performance dashboard (recent, detail, clear)"
+            "name": "test",
+            "description": "Run Playwright frontend tests on SharePoint or web apps"
           }
         ]
       }
@@ -676,151 +676,95 @@
         }
       },
       {
-        "name": "taskagent_gitOperations",
-        "displayName": "Git Operations",
-        "modelDescription": "Execute Git version control operations. Use this for commits, branches, merges, pushes, pulls, diffs, logs, and conflict resolution. Always check status before making changes.",
-        "toolReferenceName": "git",
+        "name": "taskagent_adoPullRequest",
+        "displayName": "Create ADO Pull Request",
+        "modelDescription": "Create an Azure DevOps Pull Request from the current branch. Auto-detects ADO org/project/repo from git remote. Auto-generates PR title from commits and description from diff using LLM. Supports draft PRs, auto-complete, work item linking, and adding reviewers.",
+        "toolReferenceName": "adoPullRequest",
         "canBeReferencedInPrompt": true,
-        "icon": "$(git-branch)",
+        "icon": "$(git-pull-request)",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "operation": {
+            "targetBranch": {
               "type": "string",
-              "enum": [
-                "status",
-                "add",
-                "commit",
-                "push",
-                "pull",
-                "branch",
-                "merge",
-                "diff",
-                "log",
-                "checkout",
-                "stash",
-                "reset",
-                "resolveConflict"
-              ],
-              "description": "The Git operation to perform"
+              "description": "Target branch for the PR (e.g., 'main'). Auto-detected if not specified."
             },
-            "message": {
+            "title": {
               "type": "string",
-              "description": "Commit message (for commit) or stash message (for stash save)"
+              "description": "PR title. Auto-generated from commits if not provided."
             },
-            "branch": {
+            "description": {
               "type": "string",
-              "description": "Branch name for branch/checkout/merge operations"
+              "description": "PR description in Markdown. Auto-generated from diff if not provided."
             },
-            "remote": {
-              "type": "string",
-              "description": "Remote name for push/pull (default: origin)"
-            },
-            "files": {
+            "workItemIds": {
               "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "description": "Specific files for add/commit/diff/reset/resolveConflict"
+              "items": { "type": "number" },
+              "description": "Azure DevOps work item IDs to link to the PR."
             },
-            "numCommits": {
-              "type": "number",
-              "description": "Number of commits to show in log (default: 10)"
-            },
-            "createNew": {
+            "autoComplete": {
               "type": "boolean",
-              "description": "Create new branch when using branch/checkout"
+              "description": "Set PR to auto-complete after approval."
             },
-            "stashAction": {
-              "type": "string",
-              "enum": [
-                "save",
-                "pop",
-                "list",
-                "drop"
-              ],
-              "description": "Stash action: save, pop, list, or drop"
+            "reviewers": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Reviewer emails to add to the PR."
             },
-            "conflictStrategy": {
-              "type": "string",
-              "enum": [
-                "ours",
-                "theirs"
-              ],
-              "description": "Strategy for resolving conflicts: use 'ours' (current) or 'theirs' (incoming)"
+            "isDraft": {
+              "type": "boolean",
+              "description": "Create as a draft PR."
             }
           },
-          "required": [
-            "operation"
-          ]
+          "required": []
         }
       },
       {
-        "name": "taskagent_financialAnalysis",
-        "displayName": "Financial Analysis",
-        "modelDescription": "Analyze stock markets, economic trends, and provide investment research. Supports market overview, stock analysis, sector analysis, technical indicators, fundamental analysis, risk assessment, portfolio suggestions, news impact, and economic calendar. Use this for financial research and market analysis.",
-        "toolReferenceName": "financial",
+        "name": "taskagent_playwrightTest",
+        "displayName": "Playwright Frontend Test",
+        "modelDescription": "Run automated frontend tests using Playwright. Launches a browser, navigates to a SharePoint site or web app, auto-logs in with Microsoft/AAD credentials, and runs test scenarios (smoke, navigation, CRUD, or custom steps). Captures screenshots at each step.",
+        "toolReferenceName": "playwrightTest",
         "canBeReferencedInPrompt": true,
-        "icon": "$(graph)",
+        "icon": "$(beaker)",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "operation": {
+            "siteUrl": {
               "type": "string",
-              "enum": [
-                "marketOverview",
-                "stockAnalysis",
-                "sectorAnalysis",
-                "globalTrends",
-                "technicalIndicators",
-                "fundamentalAnalysis",
-                "riskAssessment",
-                "portfolioSuggestion",
-                "newsImpact",
-                "economicCalendar"
-              ],
-              "description": "The type of financial analysis to perform"
+              "description": "The URL of the site to test (e.g., https://contoso.sharepoint.com/sites/mysite)"
             },
-            "symbol": {
+            "scenario": {
               "type": "string",
-              "description": "Stock symbol (e.g., AAPL, MSFT, TSLA) for stock-specific analysis"
+              "enum": ["smoke", "navigation", "crud", "custom"],
+              "description": "Test scenario to run: 'smoke' (page load + errors), 'navigation' (click through nav), 'crud' (list operations), 'custom' (custom steps)"
             },
-            "sector": {
-              "type": "string",
-              "description": "Sector name (e.g., Technology, Healthcare, Financials, Energy)"
-            },
-            "region": {
-              "type": "string",
-              "description": "Region for analysis (e.g., US, Europe, China, Asia, Global)"
-            },
-            "timeframe": {
-              "type": "string",
-              "description": "Analysis timeframe (e.g., 1D, 1W, 1M, 3M, 1Y)"
-            },
-            "indicators": {
+            "customSteps": {
               "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "description": "Technical indicators to analyze (e.g., RSI, MACD, SMA, EMA, BB)"
+              "items": { "type": "string" },
+              "description": "Custom test steps for 'custom' scenario. Commands: 'goto <url>', 'click <selector>', 'fill <selector> <value>', 'wait <ms>', 'assert text <text>', 'assert url <url>'"
             },
-            "riskTolerance": {
+            "username": {
               "type": "string",
-              "enum": [
-                "low",
-                "medium",
-                "high"
-              ],
-              "description": "Risk tolerance level for portfolio suggestions"
+              "description": "Microsoft/AAD username for login. Uses config if not provided."
             },
-            "investmentGoal": {
+            "password": {
               "type": "string",
-              "description": "Investment goal description (e.g., 'long-term growth', 'income generation')"
+              "description": "Password for login. Uses config if not provided."
+            },
+            "screenshots": {
+              "type": "boolean",
+              "description": "Capture screenshots at each step (default: true)"
+            },
+            "headless": {
+              "type": "boolean",
+              "description": "Run in headless mode (default: false - visible browser)"
+            },
+            "timeout": {
+              "type": "number",
+              "description": "Timeout per step in milliseconds (default: 30000)"
             }
           },
-          "required": [
-            "operation"
-          ]
+          "required": ["siteUrl"]
         }
       }
     ],
@@ -836,10 +780,6 @@
       {
         "command": "taskagent.openDashboard",
         "title": "TaskAgent: Open Workflow Dashboard"
-      },
-      {
-        "command": "taskagent.openVisualization",
-        "title": "TaskAgent: Open Task Visualization"
       }
     ],
     "configuration": {
@@ -854,6 +794,26 @@
           "type": "string",
           "default": "",
           "description": "(Optional) GitHub personal access token for higher API rate limits"
+        },
+        "taskagent.adoPat": {
+          "type": "string",
+          "default": "",
+          "description": "Azure DevOps Personal Access Token (PAT) for creating PRs. Requires 'Code (Read & Write)' scope."
+        },
+        "taskagent.sharePointUsername": {
+          "type": "string",
+          "default": "",
+          "description": "SharePoint / Microsoft 365 username (email) for Playwright auto-login"
+        },
+        "taskagent.sharePointPassword": {
+          "type": "string",
+          "default": "",
+          "description": "SharePoint / Microsoft 365 password for Playwright auto-login (stored in VS Code settings)"
+        },
+        "taskagent.sharePointSiteUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Default SharePoint site URL for Playwright tests (e.g., https://contoso.sharepoint.com/sites/mysite)"
         }
       }
     },

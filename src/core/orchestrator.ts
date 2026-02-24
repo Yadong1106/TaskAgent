@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { TaskManager, Task, SubTask } from './taskManager';
 import { AgentRegistry, AgentConfig } from './agentRegistry';
+import { UsageTracker } from './usageTracker';
 
 export interface WorkflowStep {
     id: string;
@@ -33,7 +34,8 @@ export interface TaskDecomposition {
 export class Orchestrator {
     constructor(
         private taskManager: TaskManager,
-        private agentRegistry: AgentRegistry
+        private agentRegistry: AgentRegistry,
+        private usageTracker?: UsageTracker
     ) {}
 
     /**
@@ -78,11 +80,23 @@ Only output valid JSON, no other text.`)
         ];
 
         try {
+            const decomposeStart = Date.now();
             const response = await model.sendRequest(prompt, {}, token);
             let fullResponse = '';
             for await (const chunk of response.text) {
                 fullResponse += chunk;
             }
+
+            this.usageTracker?.recordCall({
+                modelId: model.id || 'unknown',
+                modelFamily: model.family || 'unknown',
+                caller: 'orchestrator:decompose',
+                purpose: 'Task decomposition',
+                inputText: userRequest,
+                outputText: fullResponse,
+                duration: Date.now() - decomposeStart,
+                success: true
+            });
 
             // Parse JSON from response
             const jsonMatch = fullResponse.match(/\{[\s\S]*\}/);
@@ -360,6 +374,7 @@ Only output valid JSON, no other text.`)
             ];
 
             // Don't pass any custom tools - let LLM use its own capabilities
+            const subtaskStart = Date.now();
             const response = await model.sendRequest(messages, {}, token);
             
             let result = '';
@@ -372,6 +387,17 @@ Only output valid JSON, no other text.`)
                 }
                 // Ignore any tool call parts - we don't use custom tools
             }
+
+            this.usageTracker?.recordCall({
+                modelId: model.id || 'unknown',
+                modelFamily: model.family || 'unknown',
+                caller: `orchestrator:agent:${subtask.agentId}`,
+                purpose: `Subtask: ${subtask.description.slice(0, 80)}`,
+                inputText: subtask.description + (context || ''),
+                outputText: result,
+                duration: Date.now() - subtaskStart,
+                success: true
+            });
 
             this.taskManager.updateSubtaskStatus(parentTask.id, managedSubtask.id, 'completed', result);
             return result;
