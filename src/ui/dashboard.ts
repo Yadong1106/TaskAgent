@@ -6,6 +6,7 @@ import { WorkflowEngine } from '../core/workflowEngine';
 import { AgentBus } from '../core/agentBus';
 import { MemoryModule } from '../core/memory';
 import { UsageTracker } from '../core/usageTracker';
+import { McpBridge } from '../core/mcpBridge';
 
 /**
  * DashboardPanel - Enhanced Webview Dashboard
@@ -33,7 +34,8 @@ export class DashboardPanel {
         private workflowEngine: WorkflowEngine,
         private agentBus: AgentBus,
         private memory: MemoryModule,
-        private usageTracker: UsageTracker
+        private usageTracker: UsageTracker,
+        private mcpBridge?: McpBridge
     ) {
         this.panel = panel;
         this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
@@ -56,7 +58,8 @@ export class DashboardPanel {
         workflowEngine: WorkflowEngine,
         agentBus: AgentBus,
         memory: MemoryModule,
-        usageTracker: UsageTracker
+        usageTracker: UsageTracker,
+        mcpBridge?: McpBridge
     ) {
         const column = vscode.ViewColumn.Two;
 
@@ -77,7 +80,7 @@ export class DashboardPanel {
         );
 
         DashboardPanel.currentPanel = new DashboardPanel(
-            panel, taskManager, agentRegistry, skillRegistry, workflowEngine, agentBus, memory, usageTracker
+            panel, taskManager, agentRegistry, skillRegistry, workflowEngine, agentBus, memory, usageTracker, mcpBridge
         );
     }
 
@@ -97,13 +100,13 @@ export class DashboardPanel {
         }
     }
 
-    private update() {
+    private async update() {
         if (this.panel.visible) {
-            this.panel.webview.html = this.getHtmlContent();
+            this.panel.webview.html = await this.getHtmlContent();
         }
     }
 
-    private getHtmlContent(): string {
+    private async getHtmlContent(): Promise<string> {
         // Gather data
         const tasks = this.taskManager.getAllTasks();
         const agents = this.agentRegistry.getAllAgents();
@@ -120,6 +123,9 @@ export class DashboardPanel {
         const callerStats = this.usageTracker.getCallerStats();
         const recentCalls = this.usageTracker.getRecentCalls(25);
         const hourlyUsage = this.usageTracker.getHourlyUsage(24);
+
+        // MCP / external tools data
+        const toolsSummary = this.mcpBridge ? await this.mcpBridge.getToolsSummary() : { total: 0, taskagent: 0, mcp: 0, extension: 0, mcpServers: [], tools: [] };
 
         const runningTasks = tasks.filter((t: any) => t.status === 'running').length;
         const completedTasks = tasks.filter((t: any) => t.status === 'completed').length;
@@ -388,6 +394,7 @@ export class DashboardPanel {
         <div class="tab" onclick="switchTab('workflows')">📋 Workflows</div>
         <div class="tab" onclick="switchTab('messages')">💬 Messages</div>
         <div class="tab" onclick="switchTab('usage')">📊 Token Usage</div>
+        <div class="tab" onclick="switchTab('tools')">🔌 Tools & MCP</div>
         <div class="tab" onclick="switchTab('memory')">🧠 Memory</div>
     </div>
 
@@ -526,6 +533,86 @@ export class DashboardPanel {
                 </div>
             </div>
         </div>
+    </div>
+
+    <!-- Tools & MCP Tab -->
+    <div id="tab-tools" class="tab-content">
+        <div class="section">
+            <h3>🔌 Tools Overview</h3>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="number">${toolsSummary.total}</div>
+                    <div class="label">Total Tools</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number">${toolsSummary.taskagent}</div>
+                    <div class="label">TaskAgent Tools</div>
+                </div>
+                <div class="stat-card" style="border-color:#c586c0">
+                    <div class="number" style="color:#c586c0">${toolsSummary.mcp}</div>
+                    <div class="label">MCP Tools</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number">${toolsSummary.extension}</div>
+                    <div class="label">Extension Tools</div>
+                </div>
+            </div>
+            ${toolsSummary.mcpServers.length > 0 ? `
+            <div style="margin-top:12px;color:var(--text-muted);font-size:12px">
+                <strong>MCP Servers:</strong> ${toolsSummary.mcpServers.map(s => `<span class="badge pending">${s}</span>`).join(' ')}
+            </div>` : ''}
+        </div>
+
+        ${toolsSummary.mcp > 0 ? `
+        <div class="section">
+            <h3>🌐 MCP Server Tools</h3>
+            <table>
+                <tr><th>Tool</th><th>Server</th><th>Description</th><th>Tags</th></tr>
+                ${toolsSummary.tools.filter(t => t.source === 'mcp').map(t => `
+                <tr>
+                    <td><strong>${t.name}</strong></td>
+                    <td><span class="badge pending">${t.serverName || '?'}</span></td>
+                    <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.description.slice(0, 100)}</td>
+                    <td style="font-size:11px">${t.tags.slice(0, 4).map(tag => `<span class="badge running">${tag}</span>`).join(' ')}</td>
+                </tr>`).join('')}
+            </table>
+        </div>` : `
+        <div class="section">
+            <h3>🌐 MCP Server Tools</h3>
+            <div style="text-align:center;color:var(--text-muted);padding:20px">
+                No MCP servers configured.<br><br>
+                Add MCP servers in <code>.vscode/mcp.json</code> or via<br>
+                <code>Ctrl+Shift+P → MCP: Add Server</code><br><br>
+                Example: <code>{ "servers": { "playwright": { "command": "npx", "args": ["-y", "@microsoft/mcp-server-playwright"] } } }</code>
+            </div>
+        </div>`}
+
+        <div class="section">
+            <h3>🛠️ TaskAgent Built-in Tools (${toolsSummary.taskagent})</h3>
+            <table>
+                <tr><th>Tool</th><th>Tags</th><th>Description</th></tr>
+                ${toolsSummary.tools.filter(t => t.source === 'taskagent').map(t => `
+                <tr>
+                    <td><strong>${t.name.replace('taskagent_', '')}</strong></td>
+                    <td style="font-size:11px">${t.tags.slice(0, 3).map(tag => `<span class="badge completed">${tag}</span>`).join(' ')}</td>
+                    <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.description.slice(0, 120)}</td>
+                </tr>`).join('')}
+            </table>
+        </div>
+
+        ${toolsSummary.extension > 0 ? `
+        <div class="section">
+            <h3>🧩 Other Extension Tools (${toolsSummary.extension})</h3>
+            <table>
+                <tr><th>Tool</th><th>Description</th><th>Tags</th></tr>
+                ${toolsSummary.tools.filter(t => t.source === 'extension').map(t => `
+                <tr>
+                    <td><strong>${t.name}</strong></td>
+                    <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.description.slice(0, 100)}</td>
+                    <td style="font-size:11px">${t.tags.slice(0, 3).map(tag => `<span class="badge disabled">${tag}</span>`).join(' ')}</td>
+                </tr>`).join('')}
+            </table>
+        </div>` : ''}
     </div>
 
     <!-- Token Usage Tab -->

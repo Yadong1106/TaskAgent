@@ -374,13 +374,13 @@ export class AgentAnalytics {
     private saveToMemory() {
         if (this.memoryModule) {
             try {
-                this.memoryModule.store('agent_analytics', {
+                this.memoryModule.addMemorySync('learning', JSON.stringify({
                     executions: this.executions.map(e => ({
                         ...e,
                         startTime: e.startTime.toISOString(),
                         endTime: e.endTime.toISOString()
                     }))
-                }, { type: 'analytics', persistent: true });
+                }), { tags: ['analytics'], context: 'persistent' });
             } catch (e) {
                 console.warn('Failed to save analytics to memory:', e);
             }
@@ -393,7 +393,8 @@ export class AgentAnalytics {
     private loadFromMemory() {
         if (this.memoryModule) {
             try {
-                const data = this.memoryModule.retrieve('agent_analytics');
+                const memories = this.memoryModule.searchMemories('agent_analytics', 'learning', 1);
+                const data = memories.length > 0 ? JSON.parse(memories[0].content) : null;
                 if (data && data.executions) {
                     this.executions = data.executions.map((e: any) => ({
                         ...e,

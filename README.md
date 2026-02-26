@@ -13,7 +13,8 @@
 - **ADO Pull Request Creation** — Auto-generate PR title/description from git diff, create PR via Azure DevOps REST API
 - **Playwright Frontend Testing** — Automated browser testing with SharePoint auto-login support
 - **Token Usage Tracking** — Per-model token usage, estimated cost, hourly charts, call logs
-- **Rich Dashboard** — 7-tab Webview dashboard with real-time stats
+- **MCP Server Integration** — Auto-discover and use external MCP tools (Playwright, GitHub, databases, etc.)
+- **Rich Dashboard** — 8-tab Webview dashboard with real-time stats
 - **Semantic Memory** — Vector embedding-based memory with semantic search
 - **Human-in-the-loop** — Confirmation before critical operations
 
@@ -75,8 +76,43 @@ All commands are invoked via `@taskagent /command` in Copilot Chat.
 | `/workflow` | Run and manage workflow pipelines | `@taskagent /workflow run pr-review-pipeline` |
 | `/pr` | Create Azure DevOps Pull Request from current branch | `@taskagent /pr` |
 | `/test` | Run Playwright frontend tests on web apps | `@taskagent /test https://contoso.sharepoint.com/sites/mysite` |
+| `/ship` | Full pipeline: test changes → auto-fix bugs → create PR | `@taskagent /ship https://mysite.sharepoint.com` |
 
 ---
+
+## 🚀 Ship Pipeline (`/ship`)
+
+The `/ship` command runs a complete **Test → Fix → PR** pipeline for your current branch:
+
+```
+@taskagent /ship                                    # Run tests + create PR
+@taskagent /ship https://contoso.sharepoint.com     # Include Playwright browser test
+```
+
+### Pipeline Phases
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Phase 1: Analyze Changes                                    │
+│  • git diff to find changed files                            │
+│  • Categorize: frontend / backend / test files               │
+├─────────────────────────────────────────────────────────────┤
+│  Phase 2: Test (up to 3 attempts)                            │
+│  • Run project tests (npm test / pytest / tsc --noEmit)      │
+│  • Run Playwright smoke test (if URL provided + UI changes)  │
+│  • AI code review for critical bugs                          │
+├─────────────────────────────────────────────────────────────┤
+│  Phase 3: Auto-Fix (if tests fail)                           │
+│  • LLM analyzes failures + source code                       │
+│  • Generates and applies fixes                               │
+│  • Commits fixes, re-runs tests                              │
+│  • Repeats up to 3 times                                     │
+├─────────────────────────────────────────────────────────────┤
+│  Phase 4: Create PR (if all tests pass)                      │
+│  • Auto-generate title + description                         │
+│  • Create PR on Azure DevOps                                 │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ## 🧩 Skills System
 
@@ -194,7 +230,53 @@ Automated browser testing with Microsoft AAD auto-login support.
 
 ---
 
-## 🛠️ Language Model Tools (20 total)
+## � MCP Server Integration
+
+TaskAgent automatically discovers and uses tools from MCP servers you configure in VS Code. Agents intelligently select relevant MCP tools based on the task.
+
+### How It Works
+
+1. Configure MCP servers in `.vscode/mcp.json` or via `Ctrl+Shift+P` → `MCP: Add Server`
+2. TaskAgent auto-discovers all available tools (own + MCP + other extensions)
+3. When the Orchestrator assigns tasks, it matches relevant tools to each agent
+4. Agents can call MCP tools during execution (with multi-round tool calling support)
+
+### Example: Add Playwright MCP Server
+
+```json
+// .vscode/mcp.json
+{
+  "servers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@microsoft/mcp-server-playwright"]
+    }
+  }
+}
+```
+
+Now `@taskagent /automate Open my site, take a screenshot, and check for errors` will automatically use Playwright MCP tools.
+
+### Example: Add GitHub MCP Server
+
+```json
+{
+  "servers": {
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp"
+    }
+  }
+}
+```
+
+### Dashboard
+
+The **🔌 Tools & MCP** tab in the Dashboard shows all discovered tools grouped by source (TaskAgent / MCP / Extension), with MCP server names, tags, and descriptions.
+
+---
+
+## 🛠️ Language Model Tools (20+ built-in)
 
 These tools are available to the AI agents and can also be referenced in prompts via `#toolName`.
 

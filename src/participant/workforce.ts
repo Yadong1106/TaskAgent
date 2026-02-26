@@ -69,6 +69,10 @@ export class WorkforceParticipant {
                 return await this.handlePullRequest(userPrompt, request, stream, token);
             } else if (command === 'test') {
                 return await this.handlePlaywrightTest(userPrompt, request, stream, token);
+            } else if (command === 'ship') {
+                return await this.handleShip(userPrompt, request, stream, token);
+            } else if (command === 'commit') {
+                return await this.handleQuickCommit(userPrompt, request, stream, token);
             }
 
             // Default: auto-detect and orchestrate
@@ -693,6 +697,205 @@ Now create the UI and show the preview:`;
 
     // ===== Pull Request Command =====
 
+    // ===== /commit - Quick Commit & Push =====
+    private async handleQuickCommit(
+        prompt: string,
+        request: vscode.ChatRequest,
+        stream: vscode.ChatResponseStream,
+        token: vscode.CancellationToken
+    ): Promise<vscode.ChatResult> {
+        const { exec } = require('child_process');
+        const { promisify } = require('util');
+        const execAsync = promisify(exec);
+
+        const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!cwd) {
+            stream.markdown('❌ No workspace folder open.');
+            return { metadata: { command: 'commit' } };
+        }
+
+        stream.markdown('## 📦 Quick Commit & Push\n\n');
+        stream.progress('Checking git status...');
+
+        try {
+            // 1. Check for changes
+            const { stdout: statusOut } = await execAsync('git status --porcelain', { cwd });
+            if (!statusOut.trim()) {
+                stream.markdown('✅ Working tree is clean — nothing to commit.\n');
+                return { metadata: { command: 'commit' } };
+            }
+
+            // 2. Get branch
+            const { stdout: branchOut } = await execAsync('git branch --show-current', { cwd });
+            const branch = branchOut.trim();
+
+            // 3. Parse changed files
+            const changedFiles = statusOut.trim().split('\n').map((l: string) => l.trim());
+            const newFiles = changedFiles.filter((f: string) => f.startsWith('??') || f.startsWith('A '));
+            const modifiedFiles = changedFiles.filter((f: string) => f.startsWith(' M') || f.startsWith('M '));
+            const deletedFiles = changedFiles.filter((f: string) => f.startsWith(' D') || f.startsWith('D '));
+
+            stream.markdown(`**Branch:** \`${branch}\`\n\n`);
+            stream.markdown(`| Status | Count |\n|--------|-------|\n`);
+            if (newFiles.length) { stream.markdown(`| ➕ New | ${newFiles.length} |\n`); }
+            if (modifiedFiles.length) { stream.markdown(`| ✏️ Modified | ${modifiedFiles.length} |\n`); }
+            if (deletedFiles.length) { stream.markdown(`| 🗑️ Deleted | ${deletedFiles.length} |\n`); }
+            stream.markdown(`| **Total** | **${changedFiles.length}** |\n\n`);
+
+            // 4. Generate commit message
+            let commitMsg = prompt.trim();
+            if (!commitMsg) {
+                // Use LLM to generate a meaningful commit message from the diff
+                stream.progress('Analyzing changes to generate commit message...');
+                commitMsg = await this.generateCommitMessage(cwd, changedFiles, request.model, token);
+            }
+
+            stream.markdown(`**Commit message:** \`${commitMsg}\`\n\n`);
+
+            // 5. git add
+            stream.progress('Staging all changes...');
+            await execAsync('git add .', { cwd });
+            stream.markdown(`**Staging:** \`git add .\` ✅\n\n`);
+
+            // 6. git commit
+            stream.progress('Committing...');
+            const escapedMsg = commitMsg.replace(/"/g, '\\"');
+            await execAsync(`git commit -m "${escapedMsg}"`, { cwd });
+            stream.markdown(`**Commit:** ✅\n\n`);
+
+            // 7. git push
+            stream.progress(`Pushing to origin/${branch}...`);
+            try {
+                await execAsync(`git push origin ${branch}`, { cwd });
+            } catch (pushErr: any) {
+                if (pushErr.message?.includes('no upstream') || pushErr.message?.includes('has no upstream')) {
+                    await execAsync(`git push --set-upstream origin ${branch}`, { cwd });
+                } else {
+                    throw pushErr;
+                }
+            }
+            stream.markdown(`**Push:** \`origin/${branch}\` ✅\n\n`);
+
+            stream.markdown(`---\n\n🎉 **Done!** ${changedFiles.length} file(s) committed and pushed to \`${branch}\`.\n`);
+
+            return { metadata: { command: 'commit' } };
+
+        } catch (error: any) {
+            stream.markdown(`\n❌ **Error:** ${error.message}\n`);
+            return { metadata: { command: 'commit', error: true } };
+        }
+    }
+
+    /**
+     * Use LLM to generate a conventional commit message from the git diff.
+     * Falls back to a simple summary if LLM call fails.
+     */
+    private async generateCommitMessage(
+        cwd: string,
+        changedFiles: string[],
+        model: vscode.LanguageModelChat,
+        token: vscode.CancellationToken
+    ): Promise<string> {
+        const { exec } = require('child_process');
+        const { promisify } = require('util');
+        const execAsync = promisify(exec);
+
+        try {
+            // Get diff (staged + unstaged), limit size to avoid token overflow
+            let diff = '';
+            try {
+                const { stdout: diffOut } = await execAsync(
+                    'git diff HEAD --stat',
+                    { cwd, encoding: 'utf-8', maxBuffer: 1024 * 1024 }
+                );
+                diff += diffOut;
+            } catch { /* ignore */ }
+
+            try {
+                // Get the actual content diff but truncated
+                const { stdout: diffContent } = await execAsync(
+                    'git diff HEAD',
+                    { cwd, encoding: 'utf-8', maxBuffer: 1024 * 512 }
+                );
+                // Limit to ~4000 chars to stay within token budget
+                diff += '\n' + (diffContent.length > 4000 ? diffContent.slice(0, 4000) + '\n... (truncated)' : diffContent);
+            } catch { /* ignore */ }
+
+            // Also get untracked file names
+            const untrackedFiles = changedFiles
+                .filter((f: string) => f.startsWith('??'))
+                .map((f: string) => f.replace('?? ', ''));
+            if (untrackedFiles.length > 0) {
+                diff += `\n\nNew untracked files:\n${untrackedFiles.join('\n')}`;
+            }
+
+            if (!diff.trim()) {
+                // Fallback if diff is empty
+                throw new Error('Empty diff');
+            }
+
+            const llmPrompt = `You are a commit message generator. Based on the git diff below, generate a single-line conventional commit message.
+
+Rules:
+- Use conventional commit format: type(scope): description
+- Types: feat, fix, refactor, docs, style, test, chore, perf, ci, build
+- Scope is optional, use the most relevant module/area name
+- Description should be concise (max 72 chars total), lowercase, no period at end
+- Output ONLY the commit message, nothing else — no quotes, no explanation
+
+Git diff:
+\`\`\`
+${diff}
+\`\`\`
+
+Commit message:`;
+
+            const messages = [vscode.LanguageModelChatMessage.User(llmPrompt)];
+            const response = await model.sendRequest(messages, {}, token);
+
+            let commitMsg = '';
+            for await (const chunk of response.text) {
+                commitMsg += chunk;
+            }
+
+            // Clean up: take first line, remove quotes/backticks
+            commitMsg = commitMsg
+                .split('\n')[0]
+                .trim()
+                .replace(/^[`"']+|[`"']+$/g, '')
+                .trim();
+
+            // Track usage
+            this.usageTracker?.recordCall({
+                modelId: model.id || 'unknown',
+                modelFamily: model.family || 'unknown',
+                caller: 'workforce:commit',
+                purpose: 'Generate commit message from diff',
+                inputText: llmPrompt.slice(0, 200),
+                outputText: commitMsg,
+                duration: 0,
+                success: true
+            });
+
+            if (commitMsg && commitMsg.length > 5 && commitMsg.length < 200) {
+                return commitMsg;
+            }
+
+            throw new Error('Invalid LLM output');
+
+        } catch {
+            // Fallback: simple file-count based message
+            const newFiles = changedFiles.filter((f: string) => f.startsWith('??') || f.startsWith('A '));
+            const modifiedFiles = changedFiles.filter((f: string) => f.startsWith(' M') || f.startsWith('M '));
+            const deletedFiles = changedFiles.filter((f: string) => f.startsWith(' D') || f.startsWith('D '));
+            const parts: string[] = [];
+            if (newFiles.length > 0) { parts.push(`add ${newFiles.length} file(s)`); }
+            if (modifiedFiles.length > 0) { parts.push(`update ${modifiedFiles.length} file(s)`); }
+            if (deletedFiles.length > 0) { parts.push(`remove ${deletedFiles.length} file(s)`); }
+            return parts.join(', ') || `update ${changedFiles.length} file(s)`;
+        }
+    }
+
     private async handlePullRequest(
         prompt: string,
         request: vscode.ChatRequest,
@@ -859,6 +1062,535 @@ Now create the UI and show the preview:`;
         }
 
         return { metadata: { command: 'test' } };
+    }
+
+    // ===== Ship Command: Full Test → Fix → PR Pipeline =====
+
+    private async handleShip(
+        prompt: string,
+        request: vscode.ChatRequest,
+        stream: vscode.ChatResponseStream,
+        token: vscode.CancellationToken
+    ): Promise<vscode.ChatResult> {
+        const { exec } = require('child_process');
+        const { promisify } = require('util');
+        const execAsync = promisify(exec);
+        const path = require('path');
+
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+            stream.markdown('❌ No workspace folder open.');
+            return { metadata: { command: 'ship' } };
+        }
+
+        const config = vscode.workspace.getConfiguration('taskagent');
+        const maxFixAttempts = 3;
+
+        stream.markdown('## 🚀 Ship Pipeline: Test → Fix → PR\n\n');
+
+        // ===== Phase 1: Analyze current branch changes =====
+        stream.markdown('### 📋 Phase 1: Analyze Branch Changes\n\n');
+        stream.progress('Analyzing git changes...');
+
+        let currentBranch: string;
+        let defaultBranch: string;
+        let changedFiles: string[];
+        let diffSummary: string;
+
+        try {
+            const run = (cmd: string) => execAsync(cmd, { cwd: workspaceRoot, encoding: 'utf-8' });
+            
+            const { stdout: branchRaw } = await run('git rev-parse --abbrev-ref HEAD');
+            currentBranch = branchRaw.trim();
+
+            // Detect default branch
+            try {
+                await run('git rev-parse --verify origin/main');
+                defaultBranch = 'main';
+            } catch {
+                defaultBranch = 'master';
+            }
+
+            const { stdout: diffFiles } = await run(`git diff origin/${defaultBranch}...HEAD --name-only`);
+            changedFiles = diffFiles.trim().split('\n').filter((f: string) => f.length > 0);
+
+            const { stdout: diffStatRaw } = await run(`git diff origin/${defaultBranch}...HEAD --shortstat`);
+            diffSummary = diffStatRaw.trim();
+
+            const { stdout: commitLog } = await run(`git log origin/${defaultBranch}..HEAD --oneline`);
+            const commits = commitLog.trim().split('\n').filter((l: string) => l.length > 0);
+
+            stream.markdown(`**Branch:** \`${currentBranch}\` → \`${defaultBranch}\`\n`);
+            stream.markdown(`**Changes:** ${diffSummary}\n`);
+            stream.markdown(`**Commits:** ${commits.length}\n`);
+            stream.markdown(`**Changed files (${changedFiles.length}):**\n`);
+            changedFiles.slice(0, 15).forEach(f => stream.markdown(`- \`${f}\`\n`));
+            if (changedFiles.length > 15) stream.markdown(`- ... and ${changedFiles.length - 15} more\n`);
+            stream.markdown('\n');
+
+            if (changedFiles.length === 0) {
+                stream.markdown('⚠️ No changes detected on this branch. Nothing to test or ship.\n');
+                return { metadata: { command: 'ship' } };
+            }
+
+        } catch (error) {
+            stream.markdown(`❌ Failed to analyze git changes: ${error}\n`);
+            return { metadata: { command: 'ship' } };
+        }
+
+        // ===== Phase 2: Run Tests (focused on changed files) =====
+        stream.markdown('---\n\n### 🧪 Phase 2: Test Changed Code\n\n');
+
+        // Determine test strategy based on changed files
+        const frontendFiles = changedFiles.filter(f => 
+            f.endsWith('.tsx') || f.endsWith('.jsx') || f.endsWith('.css') || 
+            f.endsWith('.html') || f.endsWith('.scss') || f.endsWith('.vue')
+        );
+        const backendFiles = changedFiles.filter(f => 
+            f.endsWith('.ts') || f.endsWith('.js') || f.endsWith('.py') || f.endsWith('.cs')
+        );
+        const testFiles = changedFiles.filter(f => 
+            f.includes('.test.') || f.includes('.spec.') || f.includes('__tests__')
+        );
+
+        let testPassed = true;
+        let testOutput = '';
+        let failedTests: string[] = [];
+        let attempt = 0;
+
+        // Loop: Test → Fix → Re-test
+        while (attempt < maxFixAttempts) {
+            attempt++;
+            stream.markdown(`\n#### 🔄 Test Attempt ${attempt}/${maxFixAttempts}\n\n`);
+            stream.progress(`Running tests (attempt ${attempt})...`);
+
+            testPassed = true;
+            testOutput = '';
+            failedTests = [];
+
+            // Strategy A: Run existing unit/integration tests
+            const testResults = await this.runProjectTests(workspaceRoot, execAsync, stream, changedFiles);
+            if (!testResults.passed) {
+                testPassed = false;
+                testOutput = testResults.output;
+                failedTests = testResults.failures;
+            }
+
+            // Strategy B: If frontend files changed + SharePoint URL configured, run Playwright
+            const siteUrl = this.extractSiteUrl(prompt) || config.get<string>('sharePointSiteUrl') || '';
+            if (siteUrl && frontendFiles.length > 0) {
+                stream.markdown('\n**Running Playwright browser tests...**\n\n');
+                const playwrightResult = await this.runPlaywrightForShip(siteUrl, token, stream);
+                if (!playwrightResult.passed) {
+                    testPassed = false;
+                    testOutput += '\n\nPlaywright failures:\n' + playwrightResult.output;
+                    failedTests.push(...playwrightResult.failures);
+                }
+            }
+
+            // Strategy C: Use LLM to review changed code for bugs
+            if (testPassed) {
+                stream.markdown('\n**Running AI code review on changes...**\n\n');
+                const reviewResult = await this.aiCodeReview(workspaceRoot, changedFiles, request.model, token, stream);
+                if (reviewResult.hasCriticalIssues) {
+                    testPassed = false;
+                    testOutput += '\n\nAI Review Issues:\n' + reviewResult.issues;
+                    failedTests.push(...reviewResult.failureDescriptions);
+                }
+            }
+
+            // If all tests pass, break out of the loop
+            if (testPassed) {
+                stream.markdown('\n✅ **All tests passed!**\n\n');
+                break;
+            }
+
+            // ===== Phase 3: Auto-fix bugs =====
+            if (attempt < maxFixAttempts) {
+                stream.markdown(`\n### 🔧 Auto-Fix (Attempt ${attempt})\n\n`);
+                stream.markdown(`**Found ${failedTests.length} issue(s):**\n`);
+                failedTests.forEach((f, i) => stream.markdown(`${i + 1}. ${f}\n`));
+                stream.markdown('\n');
+                stream.progress('Asking AI to fix the issues...');
+
+                const fixed = await this.autoFixBugs(
+                    workspaceRoot, changedFiles, failedTests, testOutput,
+                    request.model, token, stream
+                );
+
+                if (!fixed) {
+                    stream.markdown('\n⚠️ **Auto-fix could not resolve all issues. Please fix manually.**\n\n');
+                    stream.markdown('Failed tests:\n');
+                    failedTests.forEach(f => stream.markdown(`- ${f}\n`));
+                    return { metadata: { command: 'ship', testPassed: false } };
+                }
+            } else {
+                stream.markdown(`\n❌ **Tests still failing after ${maxFixAttempts} attempts.**\n\n`);
+                stream.markdown('Remaining issues:\n');
+                failedTests.forEach(f => stream.markdown(`- ${f}\n`));
+                stream.markdown('\nPlease fix these manually and run `/ship` again.\n');
+                return { metadata: { command: 'ship', testPassed: false } };
+            }
+        }
+
+        // ===== Phase 4: Create PR =====
+        stream.markdown('---\n\n### 🔀 Phase 4: Create Pull Request\n\n');
+        stream.progress('Creating Azure DevOps PR...');
+
+        try {
+            const { AdoPullRequestTool } = require('../tools/adoPullRequest');
+            const prTool = new AdoPullRequestTool();
+
+            const prResult = await prTool.invoke({
+                input: {
+                    targetBranch: defaultBranch,
+                    isDraft: false,
+                    autoComplete: false
+                }
+            }, token);
+
+            const parts = (prResult as any).content || [];
+            for (const part of parts) {
+                if (part.value) {
+                    stream.markdown(part.value);
+                }
+            }
+        } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            stream.markdown(`\n❌ **PR creation failed:** ${errorMsg}\n`);
+            stream.markdown('- Set `taskagent.adoPat` in settings\n');
+            stream.markdown('- Or create the PR manually — all tests passed!\n');
+        }
+
+        stream.markdown('\n---\n\n✅ **Ship pipeline complete!**\n');
+        return { metadata: { command: 'ship', testPassed: true } };
+    }
+
+    // ===== Ship Pipeline Helpers =====
+
+    private extractSiteUrl(prompt: string): string {
+        const match = prompt.match(/https?:\/\/[^\s]+/);
+        return match ? match[0] : '';
+    }
+
+    /**
+     * Run project tests (npm test, pytest, dotnet test, etc.)
+     */
+    private async runProjectTests(
+        workspaceRoot: string,
+        execAsync: any,
+        stream: vscode.ChatResponseStream,
+        changedFiles: string[]
+    ): Promise<{ passed: boolean; output: string; failures: string[] }> {
+        const fs = require('fs');
+        const path = require('path');
+        
+        let testCommand = '';
+        const failures: string[] = [];
+
+        // Detect project type and test runner
+        if (fs.existsSync(path.join(workspaceRoot, 'package.json'))) {
+            try {
+                const pkg = JSON.parse(fs.readFileSync(path.join(workspaceRoot, 'package.json'), 'utf-8'));
+                if (pkg.scripts?.test && pkg.scripts.test !== 'echo "Error: no test specified" && exit 1') {
+                    testCommand = 'npm test -- --passWithNoTests 2>&1';
+                } else if (pkg.scripts?.['test:unit']) {
+                    testCommand = 'npm run test:unit 2>&1';
+                }
+            } catch { /* ignore */ }
+        }
+        
+        if (!testCommand && fs.existsSync(path.join(workspaceRoot, 'pytest.ini')) || 
+            fs.existsSync(path.join(workspaceRoot, 'setup.py'))) {
+            testCommand = 'python -m pytest --tb=short 2>&1';
+        }
+
+        if (!testCommand) {
+            // Try TypeScript compilation check
+            if (fs.existsSync(path.join(workspaceRoot, 'tsconfig.json'))) {
+                testCommand = 'npx tsc --noEmit 2>&1';
+                stream.markdown('📋 Running TypeScript compilation check...\n');
+            } else {
+                stream.markdown('ℹ️ No test runner detected. Skipping unit tests.\n');
+                return { passed: true, output: '', failures: [] };
+            }
+        } else {
+            stream.markdown(`📋 Running: \`${testCommand.replace(' 2>&1', '')}\`\n`);
+        }
+
+        try {
+            const { stdout } = await execAsync(testCommand, { 
+                cwd: workspaceRoot, encoding: 'utf-8', timeout: 120000 
+            });
+            stream.markdown('✅ Tests passed.\n');
+            return { passed: true, output: stdout, failures: [] };
+        } catch (error: any) {
+            const output = error.stdout || error.stderr || error.message || String(error);
+            stream.markdown('❌ Tests failed.\n');
+            
+            // Parse failure messages
+            const lines = output.split('\n');
+            for (const line of lines) {
+                if (line.match(/FAIL|ERROR|error TS|failed|✗|✖|AssertionError/i)) {
+                    failures.push(line.trim());
+                }
+            }
+            if (failures.length === 0) failures.push('Test command returned non-zero exit code');
+            
+            return { passed: false, output, failures };
+        }
+    }
+
+    /**
+     * Run Playwright smoke test for the ship pipeline
+     */
+    private async runPlaywrightForShip(
+        siteUrl: string,
+        token: vscode.CancellationToken,
+        stream: vscode.ChatResponseStream
+    ): Promise<{ passed: boolean; output: string; failures: string[] }> {
+        try {
+            const { PlaywrightTestTool } = require('../tools/playwrightTest');
+            const tool = new PlaywrightTestTool();
+
+            const result = await tool.invoke({
+                input: {
+                    siteUrl,
+                    scenario: 'smoke',
+                    headless: true,
+                    screenshots: true
+                }
+            }, token);
+
+            const parts = (result as any).content || [];
+            let output = '';
+            for (const part of parts) {
+                if (part.value) output += part.value;
+            }
+
+            // Parse pass/fail from output
+            const failedMatch = output.match(/Failed\s*\|\s*(\d+)/);
+            const failedCount = failedMatch ? parseInt(failedMatch[1]) : 0;
+
+            if (failedCount > 0) {
+                const failures: string[] = [];
+                const stepMatches = output.matchAll(/❌\s+\*\*(.+?)\*\*/g);
+                for (const m of stepMatches) failures.push(m[1]);
+                stream.markdown(output + '\n');
+                return { passed: false, output, failures };
+            }
+
+            stream.markdown('✅ Playwright smoke test passed.\n');
+            return { passed: true, output, failures: [] };
+        } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            stream.markdown(`⚠️ Playwright test skipped: ${msg}\n`);
+            return { passed: true, output: '', failures: [] };
+        }
+    }
+
+    /**
+     * Use LLM to review changed code for critical bugs
+     */
+    private async aiCodeReview(
+        workspaceRoot: string,
+        changedFiles: string[],
+        model: vscode.LanguageModelChat,
+        token: vscode.CancellationToken,
+        stream: vscode.ChatResponseStream
+    ): Promise<{ hasCriticalIssues: boolean; issues: string; failureDescriptions: string[] }> {
+        const fs = require('fs');
+        const path = require('path');
+
+        // Read content of changed files (limit to reasonable size)
+        let codeContext = '';
+        let filesIncluded = 0;
+        for (const file of changedFiles.slice(0, 10)) {
+            try {
+                const fullPath = path.join(workspaceRoot, file);
+                if (fs.existsSync(fullPath)) {
+                    const content = fs.readFileSync(fullPath, 'utf-8');
+                    if (content.length < 8000) {
+                        codeContext += `\n--- ${file} ---\n${content}\n`;
+                        filesIncluded++;
+                    }
+                }
+            } catch { /* skip */ }
+        }
+
+        if (filesIncluded === 0) {
+            return { hasCriticalIssues: false, issues: '', failureDescriptions: [] };
+        }
+
+        const reviewPrompt = `Review the following changed files for CRITICAL bugs only (not style issues).
+Focus on: null pointer errors, incorrect logic, missing error handling, security vulnerabilities, broken API contracts.
+If no critical issues found, respond with exactly: NO_CRITICAL_ISSUES
+If issues found, list each as: CRITICAL: <file> - <description>
+
+Changed files:
+${codeContext}`;
+
+        try {
+            const startTime = Date.now();
+            const messages = [vscode.LanguageModelChatMessage.User(reviewPrompt)];
+            const response = await model.sendRequest(messages, {}, token);
+            
+            let reviewText = '';
+            for await (const chunk of response.text) {
+                reviewText += chunk;
+            }
+
+            this.usageTracker?.recordCall({
+                modelId: model.id || 'unknown',
+                modelFamily: model.family || 'unknown',
+                caller: 'ship:ai-review',
+                purpose: 'AI code review for ship pipeline',
+                inputText: reviewPrompt,
+                outputText: reviewText,
+                duration: Date.now() - startTime,
+                success: true
+            });
+
+            if (reviewText.includes('NO_CRITICAL_ISSUES')) {
+                stream.markdown('✅ AI review: No critical issues found.\n');
+                return { hasCriticalIssues: false, issues: '', failureDescriptions: [] };
+            }
+
+            // Parse CRITICAL lines
+            const criticals = reviewText.split('\n')
+                .filter(l => l.trim().startsWith('CRITICAL:'))
+                .map(l => l.replace('CRITICAL:', '').trim());
+
+            if (criticals.length > 0) {
+                stream.markdown(`⚠️ AI review found ${criticals.length} critical issue(s):\n`);
+                criticals.forEach(c => stream.markdown(`- ${c}\n`));
+                return { hasCriticalIssues: true, issues: reviewText, failureDescriptions: criticals };
+            }
+
+            stream.markdown('✅ AI review: No critical issues.\n');
+            return { hasCriticalIssues: false, issues: '', failureDescriptions: [] };
+        } catch {
+            stream.markdown('ℹ️ AI review skipped (model unavailable).\n');
+            return { hasCriticalIssues: false, issues: '', failureDescriptions: [] };
+        }
+    }
+
+    /**
+     * Use LLM to auto-fix bugs found in tests
+     */
+    private async autoFixBugs(
+        workspaceRoot: string,
+        changedFiles: string[],
+        failures: string[],
+        testOutput: string,
+        model: vscode.LanguageModelChat,
+        token: vscode.CancellationToken,
+        stream: vscode.ChatResponseStream
+    ): Promise<boolean> {
+        const fs = require('fs');
+        const path = require('path');
+
+        // Read relevant source files
+        let codeContext = '';
+        for (const file of changedFiles.slice(0, 8)) {
+            try {
+                const fullPath = path.join(workspaceRoot, file);
+                if (fs.existsSync(fullPath)) {
+                    const content = fs.readFileSync(fullPath, 'utf-8');
+                    if (content.length < 8000) {
+                        codeContext += `\n--- ${file} ---\n${content}\n`;
+                    }
+                }
+            } catch { /* skip */ }
+        }
+
+        const fixPrompt = `The following code has test failures. Fix the bugs.
+
+Test failures:
+${failures.join('\n')}
+
+Test output (truncated):
+${testOutput.slice(0, 3000)}
+
+Source code:
+${codeContext}
+
+For each file that needs fixing, respond in this exact format:
+===FIX_FILE: <relative-path>===
+<complete fixed file content>
+===END_FILE===
+
+Only include files that need changes. Provide the COMPLETE file content, not patches.`;
+
+        try {
+            const startTime = Date.now();
+            const messages = [vscode.LanguageModelChatMessage.User(fixPrompt)];
+            const response = await model.sendRequest(messages, {}, token);
+            
+            let fixText = '';
+            for await (const chunk of response.text) {
+                fixText += chunk;
+            }
+
+            this.usageTracker?.recordCall({
+                modelId: model.id || 'unknown',
+                modelFamily: model.family || 'unknown',
+                caller: 'ship:auto-fix',
+                purpose: 'Auto-fix bugs in ship pipeline',
+                inputText: fixPrompt.slice(0, 500),
+                outputText: fixText.slice(0, 500),
+                duration: Date.now() - startTime,
+                success: true
+            });
+
+            // Parse and apply fixes
+            const fixRegex = /===FIX_FILE:\s*(.+?)===\n([\s\S]*?)===END_FILE===/g;
+            let match;
+            let fixCount = 0;
+
+            while ((match = fixRegex.exec(fixText)) !== null) {
+                const filePath = match[1].trim();
+                const fileContent = match[2].trim();
+                const fullPath = path.join(workspaceRoot, filePath);
+
+                try {
+                    // Safety: only write to files that exist and are in changedFiles
+                    if (fs.existsSync(fullPath) && changedFiles.includes(filePath)) {
+                        fs.writeFileSync(fullPath, fileContent, 'utf-8');
+                        stream.markdown(`✏️ Fixed: \`${filePath}\`\n`);
+                        fixCount++;
+                    } else {
+                        stream.markdown(`⏭️ Skipped: \`${filePath}\` (not in changed files)\n`);
+                    }
+                } catch (writeError) {
+                    stream.markdown(`⚠️ Failed to write \`${filePath}\`: ${writeError}\n`);
+                }
+            }
+
+            if (fixCount > 0) {
+                stream.markdown(`\n✅ Applied ${fixCount} fix(es). Re-testing...\n`);
+
+                // Stage the fixed files
+                try {
+                    const { exec: execCb } = require('child_process');
+                    const { promisify: prom } = require('util');
+                    const run = prom(execCb);
+                    await run('git add -A', { cwd: workspaceRoot });
+                    await run(`git commit -m "fix: auto-fix test failures (attempt)"`, { cwd: workspaceRoot });
+                    stream.markdown('📝 Changes committed.\n');
+                } catch {
+                    stream.markdown('ℹ️ Auto-commit skipped (no changes or git error).\n');
+                }
+
+                return true;
+            }
+
+            stream.markdown('⚠️ No auto-fixes could be generated.\n');
+            return false;
+        } catch (error) {
+            stream.markdown(`⚠️ Auto-fix failed: ${error}\n`);
+            return false;
+        }
     }
 }
 

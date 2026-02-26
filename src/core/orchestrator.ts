@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { TaskManager, Task, SubTask } from './taskManager';
 import { AgentRegistry, AgentConfig } from './agentRegistry';
 import { UsageTracker } from './usageTracker';
+import { McpBridge } from './mcpBridge';
 
 export interface WorkflowStep {
     id: string;
@@ -32,11 +33,15 @@ export interface TaskDecomposition {
  * This is the core of TaskAgent, similar to Eigent's Workforce orchestration logic
  */
 export class Orchestrator {
+    private mcpBridge: McpBridge;
+
     constructor(
         private taskManager: TaskManager,
         private agentRegistry: AgentRegistry,
         private usageTracker?: UsageTracker
-    ) {}
+    ) {
+        this.mcpBridge = new McpBridge();
+    }
 
     /**
      * Use LLM to decompose complex tasks into subtasks
@@ -47,14 +52,17 @@ export class Orchestrator {
         token: vscode.CancellationToken
     ): Promise<TaskDecomposition> {
         const agents = this.agentRegistry.getEnabledAgents();
-        const agentDescriptions = agents.map(a => `- ${a.id}: ${a.description}`).join('\n');
+        const agentDescriptions = agents.map(a => `- ${a.id}: ${a.description} [tools: ${a.tools.join(', ')}]`).join('\n');
+
+        // Discover external MCP tools
+        const externalToolDesc = await this.mcpBridge.buildToolDescription();
 
         const prompt = [
             vscode.LanguageModelChatMessage.User(`You are a task orchestrator. Your job is to break down complex tasks into subtasks and assign them to the appropriate agents.
 
 Available agents:
 ${agentDescriptions}
-
+${externalToolDesc}
 User's request: "${userRequest}"
 
 Analyze this request and break it down into subtasks. For each subtask, specify:
@@ -366,26 +374,79 @@ Only output valid JSON, no other text.`)
                 });
             }
 
-            // Execute with agent's system prompt - NO custom tools
-            // Let the LLM use its own knowledge and reasoning
+            // Find relevant tools for this agent + task (including MCP tools)
+            const relevantTools = await this.mcpBridge.findToolsForAgent(subtask.agentId, subtask.description);
+            const hasTools = relevantTools.length > 0;
+
+            const toolInstruction = hasTools
+                ? `You have tools available. Use them when needed to complete the task. If no tool is needed, just respond with your analysis directly.`
+                : `Analyze and provide your response based on the context provided.`;
+
             const messages = [
                 vscode.LanguageModelChatMessage.User(agent.systemPrompt),
-                vscode.LanguageModelChatMessage.User(`Task: ${subtask.description}${context}\n\nAnalyze and provide your response based on the context provided. Do not use any tools - just provide your analysis directly.`)
+                vscode.LanguageModelChatMessage.User(`Task: ${subtask.description}${context}\n\n${toolInstruction}`)
             ];
 
-            // Don't pass any custom tools - let LLM use its own capabilities
+            const requestOptions: vscode.LanguageModelChatRequestOptions = hasTools
+                ? { tools: relevantTools }
+                : {};
+
             const subtaskStart = Date.now();
-            const response = await model.sendRequest(messages, {}, token);
-            
             let result = '';
-            
-            // Process the response stream - text only, no tool calls
-            for await (const part of response.stream) {
-                if (part instanceof vscode.LanguageModelTextPart) {
-                    result += part.value;
-                    stream.markdown(part.value);
+
+            // May need multiple rounds if LLM calls tools
+            let currentMessages = [...messages];
+            const maxToolRounds = 5;
+
+            for (let round = 0; round <= maxToolRounds; round++) {
+                const response = await model.sendRequest(currentMessages, requestOptions, token);
+                let hasToolCall = false;
+
+                for await (const part of response.stream) {
+                    if (part instanceof vscode.LanguageModelTextPart) {
+                        result += part.value;
+                        stream.markdown(part.value);
+                    } else if (part instanceof vscode.LanguageModelToolCallPart) {
+                        hasToolCall = true;
+                        stream.markdown(`\n🔧 *Calling tool: ${part.name}...*\n`);
+
+                        try {
+                            const toolResult = await vscode.lm.invokeTool(part.name, {
+                                input: part.input,
+                                toolInvocationToken: undefined
+                            }, token);
+
+                            // Extract text from tool result
+                            let toolOutput = '';
+                            if (toolResult && (toolResult as any).content) {
+                                for (const content of (toolResult as any).content) {
+                                    if (content.value) toolOutput += content.value;
+                                }
+                            } else {
+                                toolOutput = String(toolResult);
+                            }
+
+                            result += `\n[Tool ${part.name} result]: ${toolOutput.slice(0, 500)}\n`;
+                            stream.markdown(`\n> **${part.name}** returned ${toolOutput.length} chars\n\n`);
+
+                            // Add tool result to conversation for next round
+                            currentMessages.push(
+                                vscode.LanguageModelChatMessage.User(
+                                    `Tool ${part.name} returned:\n${toolOutput.slice(0, 2000)}`
+                                )
+                            );
+                        } catch (toolError) {
+                            const errMsg = toolError instanceof Error ? toolError.message : String(toolError);
+                            stream.markdown(`\n⚠️ Tool ${part.name} failed: ${errMsg}\n`);
+                            currentMessages.push(
+                                vscode.LanguageModelChatMessage.User(`Tool ${part.name} failed: ${errMsg}`)
+                            );
+                        }
+                    }
                 }
-                // Ignore any tool call parts - we don't use custom tools
+
+                // If no tool was called, we're done
+                if (!hasToolCall) break;
             }
 
             this.usageTracker?.recordCall({

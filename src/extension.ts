@@ -13,6 +13,7 @@ import { SkillRegistry } from './core/skillRegistry';
 import { AgentBus } from './core/agentBus';
 import { WorkflowEngine } from './core/workflowEngine';
 import { UsageTracker } from './core/usageTracker';
+import { McpBridge } from './core/mcpBridge';
 import { DashboardPanel } from './ui/dashboard';
 
 let backendServer: BackendServer | undefined;
@@ -25,6 +26,7 @@ let skillRegistry: SkillRegistry | undefined;
 let agentBus: AgentBus | undefined;
 let workflowEngine: WorkflowEngine | undefined;
 let usageTracker: UsageTracker | undefined;
+let mcpBridge: McpBridge | undefined;
 
 // Export for use in other modules
 export function getMemoryModule(): MemoryModule | undefined { return memoryModule; }
@@ -36,6 +38,7 @@ export function getSkillRegistry(): SkillRegistry | undefined { return skillRegi
 export function getAgentBus(): AgentBus | undefined { return agentBus; }
 export function getWorkflowEngine(): WorkflowEngine | undefined { return workflowEngine; }
 export function getUsageTracker(): UsageTracker | undefined { return usageTracker; }
+export function getMcpBridge(): McpBridge | undefined { return mcpBridge; }
 
 export async function activate(context: vscode.ExtensionContext) {
     console.log('TaskAgent is now active!');
@@ -57,11 +60,12 @@ export async function activate(context: vscode.ExtensionContext) {
     feedbackCollector = new FeedbackCollector(memoryModule, dataGenerator);
     rolePlayEngine = new RolePlayEngine(memoryModule);
     
-    // Initialize Skills, AgentBus, Workflow Engine, and Usage Tracker
+    // Initialize Skills, AgentBus, Workflow Engine, Usage Tracker, and MCP Bridge
     skillRegistry = new SkillRegistry();
     agentBus = new AgentBus();
     workflowEngine = new WorkflowEngine();
     usageTracker = new UsageTracker();
+    mcpBridge = new McpBridge();
 
     // Initialize workspace-dependent features
     const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -123,8 +127,109 @@ export async function activate(context: vscode.ExtensionContext) {
                 workflowEngine!,
                 agentBus!,
                 memoryModule!,
-                usageTracker!
+                usageTracker!,
+                mcpBridge
             );
+        }),
+
+        // Quick Commit & Push — one-click git add + commit + push
+        vscode.commands.registerCommand('taskagent.quickCommitPush', async () => {
+            const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            if (!cwd) {
+                vscode.window.showErrorMessage('No workspace folder open.');
+                return;
+            }
+
+            const { exec } = require('child_process');
+            const { promisify } = require('util');
+            const execAsync = promisify(exec);
+
+            try {
+                // Check if there are changes
+                const { stdout: statusOut } = await execAsync('git status --porcelain', { cwd });
+                if (!statusOut.trim()) {
+                    vscode.window.showInformationMessage('No changes to commit.');
+                    return;
+                }
+
+                // Get current branch
+                const { stdout: branchOut } = await execAsync('git branch --show-current', { cwd });
+                const branch = branchOut.trim();
+
+                // Show changed files in quick pick for confirmation
+                const changedFiles = statusOut.trim().split('\n').map((l: string) => l.trim());
+                const filesSummary = changedFiles.length <= 8
+                    ? changedFiles.join('\n')
+                    : changedFiles.slice(0, 8).join('\n') + `\n... and ${changedFiles.length - 8} more`;
+
+                // Try to auto-generate commit message from diff
+                let defaultMsg = '';
+                try {
+                    const { stdout: diffStat } = await execAsync('git diff --stat HEAD 2>nul || git diff --stat --cached', { cwd, encoding: 'utf-8' });
+                    const { stdout: logMsg } = await execAsync('git log --oneline -1 2>nul', { cwd, encoding: 'utf-8' });
+                    const fileCount = changedFiles.length;
+                    const addedFiles = changedFiles.filter((f: string) => f.startsWith('??') || f.startsWith('A '));
+                    const modifiedFiles = changedFiles.filter((f: string) => f.startsWith(' M') || f.startsWith('M '));
+
+                    const parts: string[] = [];
+                    if (addedFiles.length > 0) { parts.push(`add ${addedFiles.length} file(s)`); }
+                    if (modifiedFiles.length > 0) { parts.push(`update ${modifiedFiles.length} file(s)`); }
+                    if (parts.length === 0) { parts.push(`update ${fileCount} file(s)`); }
+                    defaultMsg = parts.join(', ');
+                } catch {
+                    defaultMsg = 'update files';
+                }
+
+                // Prompt for commit message with auto-generated default
+                const commitMsg = await vscode.window.showInputBox({
+                    prompt: `Commit & push to ${branch}`,
+                    placeHolder: 'Enter commit message (leave empty for auto-generated)',
+                    value: defaultMsg,
+                    title: `📦 Quick Commit & Push (${changedFiles.length} files)`,
+                    ignoreFocusOut: true
+                });
+
+                if (commitMsg === undefined) {
+                    return; // User cancelled
+                }
+
+                const finalMsg = commitMsg.trim() || defaultMsg || 'auto commit';
+
+                // Execute: add → commit → push with progress
+                await vscode.window.withProgress(
+                    {
+                        location: vscode.ProgressLocation.Notification,
+                        title: 'Quick Commit & Push',
+                        cancellable: false
+                    },
+                    async (progress) => {
+                        progress.report({ message: 'Staging all changes...' });
+                        await execAsync('git add .', { cwd });
+
+                        progress.report({ message: 'Committing...' });
+                        const escapedMsg = finalMsg.replace(/"/g, '\\"');
+                        const { stdout: commitOut } = await execAsync(`git commit -m "${escapedMsg}"`, { cwd });
+
+                        progress.report({ message: `Pushing to ${branch}...` });
+                        try {
+                            await execAsync(`git push origin ${branch}`, { cwd });
+                        } catch (pushErr: any) {
+                            // If push fails because no upstream, try set-upstream
+                            if (pushErr.message?.includes('no upstream') || pushErr.message?.includes('has no upstream')) {
+                                await execAsync(`git push --set-upstream origin ${branch}`, { cwd });
+                            } else {
+                                throw pushErr;
+                            }
+                        }
+
+                        vscode.window.showInformationMessage(
+                            `✅ Committed & pushed ${changedFiles.length} file(s) to ${branch}: "${finalMsg}"`
+                        );
+                    }
+                );
+            } catch (error: any) {
+                vscode.window.showErrorMessage(`❌ Quick Commit failed: ${error.message}`);
+            }
         })
     );
 

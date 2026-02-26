@@ -64,6 +64,14 @@
           {
             "name": "test",
             "description": "Run Playwright frontend tests on SharePoint or web apps"
+          },
+          {
+            "name": "ship",
+            "description": "Full pipeline: analyze changes → test → auto-fix bugs → re-test → create ADO PR"
+          },
+          {
+            "name": "commit",
+            "description": "Quick git add + commit + push all changes to current branch"
           }
         ]
       }
@@ -780,6 +788,18 @@
       {
         "command": "taskagent.openDashboard",
         "title": "TaskAgent: Open Workflow Dashboard"
+      },
+      {
+        "command": "taskagent.quickCommitPush",
+        "title": "TaskAgent: Quick Commit & Push",
+        "icon": "$(cloud-upload)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "taskagent.quickCommitPush",
+        "key": "ctrl+shift+g ctrl+shift+p",
+        "mac": "cmd+shift+g cmd+shift+p"
       }
     ],
     "configuration": {
