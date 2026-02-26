@@ -31,6 +31,10 @@ export class WorkforceParticipant {
         private usageTracker?: UsageTracker
     ) {
         this.orchestrator = new Orchestrator(taskManager, agentRegistry, usageTracker);
+        // Wire AgentBus for hierarchical inter-agent communication
+        if (agentBus) {
+            this.orchestrator.setAgentBus(agentBus);
+        }
     }
 
     async handleRequest(
@@ -73,6 +77,8 @@ export class WorkforceParticipant {
                 return await this.handleShip(userPrompt, request, stream, token);
             } else if (command === 'commit') {
                 return await this.handleQuickCommit(userPrompt, request, stream, token);
+            } else if (command === 'supervise') {
+                return await this.handleSupervise(userPrompt, request, stream, token);
             }
 
             // Default: auto-detect and orchestrate
@@ -693,6 +699,67 @@ Now create the UI and show the preview:`;
         }
 
         return { metadata: { command: 'workflow' } };
+    }
+
+    // ===== /supervise - Hierarchical Agent Execution =====
+
+    private async handleSupervise(
+        prompt: string,
+        request: vscode.ChatRequest,
+        stream: vscode.ChatResponseStream,
+        token: vscode.CancellationToken
+    ): Promise<vscode.ChatResult> {
+        if (!prompt.trim()) {
+            stream.markdown('## 🧠 Hierarchical Agent Mode\n\n');
+            stream.markdown('Use `/supervise` with a complex task. A **supervisor agent** will:\n\n');
+            stream.markdown('1. Analyze your request and plan an approach\n');
+            stream.markdown('2. **Dynamically delegate** sub-tasks to specialized agents\n');
+            stream.markdown('3. **Review** sub-agent results and request revisions if needed\n');
+            stream.markdown('4. **Synthesize** a final comprehensive answer\n\n');
+            stream.markdown('**Example:**\n');
+            stream.markdown('```\n@taskagent /supervise Research the latest React 19 features, write a demo app, and create a blog post about it\n```\n\n');
+            stream.markdown('Unlike the default parallel mode, the supervisor makes **runtime decisions** — it can adapt its plan based on intermediate results.\n');
+            return { metadata: { command: 'supervise' } };
+        }
+
+        const task = this.taskManager.createTask(`Supervise: ${prompt.slice(0, 40)}...`);
+
+        try {
+            // Parse optional supervisor agent from prompt (e.g., "supervisor=architect ...")
+            let supervisorAgentId: string | undefined;
+            let cleanPrompt = prompt;
+            const supervisorMatch = prompt.match(/^supervisor=(\w+)\s+([\s\S]+)$/i);
+            if (supervisorMatch) {
+                supervisorAgentId = supervisorMatch[1];
+                cleanPrompt = supervisorMatch[2];
+            }
+
+            const result = await this.orchestrator.executeHierarchical(
+                task,
+                cleanPrompt,
+                request.model,
+                stream,
+                token,
+                {
+                    supervisorAgentId,
+                    maxRounds: 8,
+                    maxDepth: 3
+                }
+            );
+
+            return {
+                metadata: {
+                    command: 'supervise',
+                    taskId: task.id,
+                    totalRounds: result.totalRounds,
+                    totalDelegations: result.delegations.length
+                }
+            };
+
+        } catch (error) {
+            stream.markdown(`\n\n❌ **Error:** ${error instanceof Error ? error.message : 'Unknown error'}`);
+            return { metadata: { command: 'supervise', error: true } };
+        }
     }
 
     // ===== Pull Request Command =====
